@@ -31,3 +31,5 @@ def _no_model_provider(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest
     for name in _PROVIDER_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    # The history and the last-known sys-info of each test's fabric under that home, never the user's.
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)

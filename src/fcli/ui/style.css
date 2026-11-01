@@ -833,6 +833,17 @@ dl.facts dd {
   overflow-wrap: anywhere;
 }
 
+/* Last-known values of a node not read now. */
+dl.facts.stale {
+  border-left: 3px solid var(--warning);
+  padding-left: 8px;
+}
+
+.stale-note {
+  color: var(--warning);
+  margin: 0 0 6px;
+}
+
 .pill {
   display: inline-block;
   font-size: 11px;

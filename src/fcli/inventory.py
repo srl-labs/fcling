@@ -49,6 +49,13 @@ class Node:
     labels: Mapping[str, str] = field(default_factory=dict)
     #: A containerlab node: some checks read a veth differently from a port.
     virtual: bool = False
+    #: Its management address, where the topology gives one: what fcling
+    #: reaches it at may be a name.
+    mgmt: str = ""
+
+    @property
+    def managed_at(self) -> str:
+        return self.mgmt or self.address
 
     def target(self) -> Target:
         return Target(self.address, self.port, self.username, self.password, self.tls)
@@ -150,7 +157,13 @@ def from_clab(path: str | Path) -> Inventory:
         if not _is_srl(topology, spec):
             continue
         nodes.append(
-            Node(name=str(name), address=f"{prefix}{name}", labels=_labels(topology, spec), virtual=True)
+            Node(
+                name=str(name),
+                address=f"{prefix}{name}",
+                labels=_labels(topology, spec),
+                virtual=True,
+                mgmt=str(spec.get("mgmt-ipv4") or spec.get("mgmt-ipv6") or ""),
+            )
         )
     return Inventory(name=str(topo["name"]), nodes=tuple(nodes))
 
@@ -159,7 +172,7 @@ def from_clab(path: str | Path) -> Inventory:
 # static YAML
 # --------------------------------------------------------------------------- #
 
-_NODE_FIELDS = ("address", "port", "username", "password")
+_NODE_FIELDS = ("address", "port", "username", "password", "mgmt")
 
 
 def _node(name: str, spec: Mapping[str, Any], defaults: Mapping[str, Any]) -> Node:
@@ -177,6 +190,7 @@ def _node(name: str, spec: Mapping[str, Any], defaults: Mapping[str, Any]) -> No
             password=str(merged.get("password") or SRL_DEFAULT_PASSWORD),
             tls=Tls(**tls),
             labels={**_mapping(defaults, "labels"), **_mapping(spec, "labels")},
+            mgmt=str(spec.get("mgmt") or ""),
         )
     except TypeError as exc:
         raise InventoryError(f"node {name}: {exc}") from exc

@@ -24,7 +24,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from . import inventory as inv
-from . import render, views
+from . import lastknown, render, views
 from .checks import CHECKS, finding_event, required, run_checks
 from .collect import collect
 from .gnmi.client import Tls
@@ -262,18 +262,24 @@ def _collect(
             when = parse_time(at)
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--at") from exc
+        addresses = {n.name: n.managed_at for n in fabric.nodes}
         store = Store(path)
         try:
-            state = store.state_at(when, report.name, [n.name for n in fabric.nodes])
+            state = store.state_at(when, report.name, list(addresses))
+            records = [report.record.model_validate(r) for rows in state.values() for r in rows.values()]
+            if report.name == lastknown.REPORT:
+                records = [*lastknown.at(store, when, records, addresses)]
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--at") from exc
         finally:
             store.close()
-        return [report.record.model_validate(r) for rows in state.values() for r in rows.values()], {}
+        return records, {}
     results = asyncio.run(
         collect(fabric.nodes, [report], rpc_timeout=settings.timeout, interval=interval, params=params)
     )
     records = [r for result in results for r in result.records.get(report.name, [])]
+    if report.name == lastknown.REPORT:
+        records = [*lastknown.one_shot(fabric.name, records, {n.name: n.managed_at for n in fabric.nodes})]
     return records, {result.node.name: result.error for result in results if result.error}
 
 
