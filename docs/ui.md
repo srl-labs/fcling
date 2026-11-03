@@ -35,7 +35,7 @@ The link rate is the rate a cable counts as full at (default 10 Mbps). Emulated 
 
 Click a node, a cable or a client, and the panel on the right shows:
 
-- **Node:** tier, stream state, labels, platform and software, findings, its cables and clients. Info findings are folded away behind one line.
+- **Node:** tier, stream state, labels, platform and software (type, serial, part number, base MAC, mgmt address), findings, its cables and clients. Info findings are folded away behind one line. A node that is down keeps its platform details, as last read and marked so, with when it was last seen: what replacing it takes.
 - **Cable:** each cable's ports, state and rate in each direction, and the findings on those ports.
 - **Client:** its segment, and every attachment's node, subinterface, service, VLAN, and rates to and from it.
 

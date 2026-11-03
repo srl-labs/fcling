@@ -261,6 +261,38 @@ class Store:
         )
         return {(r["node"], r["key"]): r["ts"] for r in rows}
 
+    def raised_at(
+        self, report: str, key: str, ts: float | None = None, nodes: Sequence[str] = ()
+    ) -> dict[str, float]:
+        """``{node: since}``: the nodes *report*'s record *key* stood on at *ts* -
+        now by default - and since when, without a break."""
+        where: list[str] = ["report=?", "key=?"]
+        args: list[Any] = [report, key]
+        if ts is not None:
+            where.append("ts<=?")
+            args.append(ts)
+        if nodes:
+            where.append(f"node IN ({','.join('?' * len(nodes))})")
+            args.extend(nodes)
+        since: dict[str, float] = {}
+        for row in self.db.execute(
+            f"SELECT node, op, ts FROM changes WHERE {' AND '.join(where)} ORDER BY seq", args
+        ):
+            if row["op"] == Op.REMOVE:
+                since.pop(row["node"], None)
+            else:
+                since.setdefault(row["node"], row["ts"])
+        return since
+
+    def changed(self, report: str, nodes: Sequence[str] = ()) -> dict[str, float]:
+        """``{node: when}`` *report* last changed on each node: what its records are as of."""
+        node_filter = f" AND node IN ({','.join('?' * len(nodes))})" if nodes else ""
+        rows = self.db.execute(
+            f"SELECT node, MAX(ts) AS ts FROM changes WHERE report=?{node_filter} GROUP BY node",
+            [report, *nodes],
+        )
+        return {r["node"]: r["ts"] for r in rows}
+
     # ---------------------------------------------------------- configurations
 
     def salt(self) -> str:

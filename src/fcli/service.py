@@ -22,7 +22,7 @@ import time
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-from . import render, views
+from . import lastknown, render, views
 from .acks import AckStore, finding_key
 from .checks import Finding, required, run_checks
 from .collect import collect
@@ -31,6 +31,7 @@ from .incidents import correlate
 from .inventory import Inventory, InventoryError
 from .remote import Remote, RemoteError
 from .reports import REGISTRY, bgp_rib
+from .reports.system import SystemInfo
 from .store import BeforeHistory, Store, parse_time
 
 
@@ -237,6 +238,31 @@ def _pack_collect(results: Sequence[Any], report_name: str) -> tuple[list[dict[s
     return rows, errors
 
 
+def _addresses(fabric: Inventory, names: Sequence[str]) -> dict[str, str]:
+    """``{node: address}`` of *names*, in inventory order."""
+    wanted = set(names)
+    return {n.name: n.managed_at for n in fabric.nodes if n.name in wanted}
+
+
+def _infos(rows: Sequence[dict[str, Any]]) -> list[SystemInfo]:
+    return [SystemInfo.model_validate(r) for r in rows]
+
+
+def _dumped(records: Sequence[Any]) -> list[dict[str, Any]]:
+    return [r.model_dump(mode="json") for r in records]
+
+
+async def _with_last_known(fabric: Inventory, answer: dict[str, Any], names: Sequence[str]) -> dict[str, Any]:
+    """A one-shot sys-info answer with every node in it: one not read now as last kept."""
+    if answer["report"] != lastknown.REPORT:
+        return answer
+
+    def fill() -> list[dict[str, Any]]:
+        return _dumped(lastknown.one_shot(fabric.name, _infos(answer["records"]), _addresses(fabric, names)))
+
+    return {**answer, "records": await asyncio.to_thread(fill)}
+
+
 def _collect_rpc_timeout(spec: Any, base: float) -> float:
     """BGP RIB walks can exceed the default gNMI deadline on a busy leaf."""
     if bgp_rib.parse_rib_report(spec.name) is not None:
@@ -331,20 +357,29 @@ class EngineService:
         if when is not None:
             state = await self._then(Store.state_at, when, spec.name, names)
             rows = [r for node in names for r in state.get(node, {}).values()]
+            if spec.name == lastknown.REPORT:
+                addresses = _addresses(self.fabric, names)
+                infos = await self._then(lambda store: lastknown.at(store, when, _infos(rows), addresses))
+                rows = _dumped(infos)
             return {"report": spec.name, "source": "history", "at": when, "records": rows, "errors": {}}
         if (
             spec.name in self.engine.plan.reports
             and spec.planned_reads(params)
             and all(params.get(p.name, p.default) == p.default for p in spec.params)
         ):
-            rows = [r.model_dump(mode="json") for r in self.engine.current(spec.name, names)]
+            current = self.engine.current(spec.name, names)
+            if spec.name == lastknown.REPORT:
+                current = lastknown.live(
+                    current, _addresses(self.fabric, names), self.engine.status(), self.engine.raised
+                )
+            rows = _dumped(current)
             errors = {
                 s["name"]: s["error"]
                 for s in self.engine.status()
                 if s["name"] in names and s["status"] != "live"
             }
             return {"report": spec.name, "source": "live", "records": rows, "errors": errors}
-        return await self._collect_report(spec, params, names)
+        return await _with_last_known(self.fabric, await self._collect_report(spec, params, names), names)
 
     async def _collect_report(
         self,
@@ -734,7 +769,8 @@ class LocalService:
         selected = [n for n in self.fabric.nodes if n.name in names]
         results = await collect(selected, [spec], rpc_timeout=self.rpc_timeout, params=params)
         rows, errors = await asyncio.to_thread(_pack_collect, results, spec.name)
-        return {"report": spec.name, "source": "collected", "records": rows, "errors": errors}
+        answer = {"report": spec.name, "source": "collected", "records": rows, "errors": errors}
+        return await _with_last_known(self.fabric, answer, [n.name for n in selected])
 
     async def _fabric(self, at: str | None) -> Any:
         if at:

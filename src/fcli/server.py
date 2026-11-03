@@ -219,7 +219,10 @@ async def _report_collect_stream(
             from .service import _params as svc_params
 
             params_ok = svc_params(spec, dict(params))
-            if _bgp_rib_pending(spec, params_ok):
+            if spec.name == "sys-info":
+                # A row a node, and the plain answer keeps a node that is down in it.
+                answer = await service.records(spec.name, params, query_list(request, "inv"), names)
+            elif _bgp_rib_pending(spec, params_ok):
                 answer = _empty_report(
                     spec,
                     "Narrow the RIB with route keys or network-instance, or choose List all routes.",

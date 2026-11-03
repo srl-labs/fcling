@@ -10,7 +10,7 @@ Every report is a command. It asks all selected nodes at once over gNMI and prin
 
 | Report | Shows | Options |
 |---|---|---|
-| `sys-info` | chassis type, serial, MAC, software release | |
+| `sys-info` | chassis type, serial, part number, MAC, software release, mgmt address; a node it cannot read as last read (from the server's history, or the last one-shot read), marked `unreachable` with when it was last seen, and one never read as `never seen` | |
 | `config-commits` | the commits each node logged to its configuration: who, when, which session | |
 | `lldp` | LLDP neighbours per interface | |
 | `subif` | subinterfaces: type, admin/oper state, the root cause when down, MTU, VLAN, addresses | |

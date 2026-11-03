@@ -2,15 +2,35 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import time
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from typing import ClassVar
 
 from ..report import Column, NodeState, Read, Record, as_int, report
 
 _CHASSIS_LEAVES = ("type", "serial-number", "part-number", "hw-mac-address", "last-booted")
 
+#: A node read now.
+UP = "up"
+#: A node not read now, shown as it last was.
+UNREACHABLE = "unreachable"
+#: A node never read: what the inventory says of it, and nothing more.
+NEVER_SEEN = "never seen"
+
 
 class SystemInfo(Record):
+    #: What a record is filed under: what the node said of itself, not what
+    #: is filled in as it is answered.
+    key: ClassVar[tuple[str, ...]] = (
+        "type",
+        "serial_number",
+        "part_number",
+        "hw_mac_address",
+        "last_booted",
+        "software_version",
+    )
+
     type: str = ""
     serial_number: str = ""
     part_number: str = ""
@@ -18,12 +38,73 @@ class SystemInfo(Record):
     last_booted: str = ""
     #: The release alone, ``26.7.1``: SR Linux reports ``v26.7.1-554-g78ed635f70a``.
     software_version: str = ""
+    #: Where it is managed: the topology's mgmt address, or else what fcling
+    #: reaches it at. This and the rest are filled in as sys-info is answered,
+    #: never kept: a node never read has them too.
+    address: str = ""
+    #: ``up``, or why the rest is not from now: ``unreachable``, ``never seen``,
+    #: or the engine's word for a node it is (re)connecting to.
+    status: str = ""
+    #: When a node not read now was last read, UTC; empty when nobody knows.
+    last_seen: str = ""
+
+
+#: The fields filled in as sys-info is answered, not read from the node.
+ANSWERED = frozenset({"address", "status", "last_seen"})
+
+
+@dataclass(frozen=True)
+class Absent:
+    """A node sys-info has nothing from now: why, and what it said last."""
+
+    status: str = UNREACHABLE
+    #: When it was last read, if anyone knows.
+    seen: float | None = None
+    #: What it said then, if anyone kept it.
+    record: SystemInfo | None = None
+
+
+def _utc(ts: float | None) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if ts else ""
+
+
+def with_absent(
+    records: Iterable[SystemInfo], addresses: Mapping[str, str], absent: Mapping[str, Absent]
+) -> list[SystemInfo]:
+    """One row for each node of *addresses*: as read now, as it was last read -
+    marked so - or, for a node never read, what the inventory knows. A dead
+    node is the one whose chassis and serial are wanted most: it never drops out.
+    """
+    read = {r.node: r for r in records}
+    out = []
+    for node, address in addresses.items():
+        gone = absent.get(node)
+        record = read.get(node)
+        if gone is None and record is not None:
+            out.append(record.model_copy(update={"address": address, "status": UP}))
+            continue
+        gone = gone or Absent(status=NEVER_SEEN)
+        record = record or gone.record
+        if record is None:
+            out.append(SystemInfo(node=node, address=address, status=NEVER_SEEN))
+        else:
+            out.append(
+                record.model_copy(
+                    update={"address": address, "status": gone.status, "last_seen": _utc(gone.seen)}
+                )
+            )
+    return out
 
 
 @report(
     "sys-info",
     "System information of nodes",
     record=SystemInfo,
+    columns=[
+        *(Column(name.replace("_", "-"), name) for name in SystemInfo.key),
+        Column("mgmt", "address"),
+        Column("status", lambda r: f"{r.status}\nlast seen {r.last_seen}" if r.last_seen else r.status),
+    ],
     # The leaves alone: the chassis container also carries power and environment readings.
     reads=[
         *(Read(f"/platform/chassis/{leaf}") for leaf in _CHASSIS_LEAVES),

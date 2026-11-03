@@ -705,10 +705,21 @@ function SysInfo({ node, at }) {
     ["type", info.type],
     ["software", info.software_version],
     ["serial", info.serial_number],
+    ["part", info.part_number],
+    ["base MAC", info.hw_mac_address],
+    ["mgmt", info.address],
     ["booted", info.last_booted],
   ].filter(([, v]) => v);
-  if (!rows.length) return null;
-  return html`<dl class="facts">${rows.map(([k, v]) => html`<dt>${k}</dt><dd class="mono">${v}</dd>`)}</dl>`;
+  // A node not read now keeps its last-known hardware: what replacing it takes.
+  const stale = info.status && info.status !== "up";
+  const seen = info.last_seen ? Date.parse(info.last_seen) / 1000 : 0;
+  const note = info.status === "never seen"
+    ? "Never read: no hardware details are known."
+    : stale && `Last known${seen ? `, seen ${ago(seen)}` : ""}: the node is ${info.status}.`;
+  if (!rows.length && !note) return null;
+  return html`${note && html`<p class="muted small stale-note">${note}</p>`}
+    ${rows.length > 0 &&
+    html`<dl class=${`facts${stale ? " stale" : ""}`}>${rows.map(([k, v]) => html`<dt>${k}</dt><dd class="mono">${v}</dd>`)}</dl>`}`;
 }
 
 export function Details({ selection, graph, status, checks, at, onSelect }) {
@@ -756,7 +767,7 @@ export function Details({ selection, graph, status, checks, at, onSelect }) {
         html`<dt>labels</dt><dd>${Object.entries(s.labels).map(([k, v]) => html`<span class="chip">${k}=${v}</span>`)}</dd>`}
       </dl>
       ${(n.unreachable || s?.error) && html`<p class="error-text">${n.unreachable || s.error}</p>`}
-      ${!n.unreachable && html`<${SysInfo} node=${n.name} at=${at} />`}
+      <${SysInfo} node=${n.name} at=${at} />
       <h3>Findings</h3>
       <${Findings} findings=${checks.filter((f) => f.node === n.name)} />
       <h3>Cables</h3>
