@@ -20,12 +20,12 @@ The command is `fcling` so that it can be installed beside the original, Nornir-
 
 ### Container image
 
-Each release is also an image, `ghcr.io/wdesmedt/fcling`. Its entrypoint is `fcling`, it works in `/work` and keeps its history in the `/state` volume:
+Each release is also an image, `ghcr.io/srl-labs/fcling`. Its entrypoint is `fcling`, it works in `/work` and keeps its history in the `/state` volume:
 
 ```bash
-docker run --rm --network host -v "$PWD:/work" ghcr.io/wdesmedt/fcling -t lab.clab.yml sys-info
+docker run --rm --network host -v "$PWD:/work" ghcr.io/srl-labs/fcling -t lab.clab.yml sys-info
 docker run -d --name fcling --network host -v "$PWD:/work" -v fcli-state:/state \
-    ghcr.io/wdesmedt/fcling -t lab.clab.yml serve
+    ghcr.io/srl-labs/fcling -t lab.clab.yml serve
 ```
 
 `--network host` lets it reach containerlab nodes by their container names and keeps `fcling serve` on localhost. Without it, publish the port and listen on every address: `-p 8765:8765 ... serve --host 0.0.0.0`. Beyond localhost the server speaks HTTPS and every call needs a token. fcli makes up both a self-signed certificate and a token, keeps them next to the history so restarts keep them, and prints the UI's URL with the token in it. You can give your own with `--tls-cert`/`--tls-key` and `--api-token` instead ([server.md](server.md#security)).

@@ -24,9 +24,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/wdesmedt/fcling"
-Documentation = "https://github.com/wdesmedt/fcling/tree/main/docs"
-Issues = "https://github.com/wdesmedt/fcling/issues"
+Homepage = "https://github.com/srl-labs/fcling"
+Documentation = "https://github.com/srl-labs/fcling/tree/main/docs"
+Issues = "https://github.com/srl-labs/fcling/issues"
 
 [project.scripts]
 fcling = "fcli.cli:main"

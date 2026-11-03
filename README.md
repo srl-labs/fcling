@@ -1,11 +1,11 @@
 # fcling
 
-[![ci](https://github.com/wdesmedt/fcling/actions/workflows/ci.yml/badge.svg)](https://github.com/wdesmedt/fcling/actions/workflows/ci.yml)
+[![ci](https://github.com/srl-labs/fcling/actions/workflows/ci.yml/badge.svg)](https://github.com/srl-labs/fcling/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/fcling)](https://pypi.org/project/fcling/)
 
 What an SR Linux fabric looks like, what is wrong with it, and what changed, straight from gNMI.
 
-This is a ground-up rewrite of [fcli](https://github.com/srl-labs/fcli). It runs on asyncio throughout, uses no Nornir and makes no blocking gNMI calls. On top of fcli's reports, it adds a streaming engine with history, fabric checks grouped into incidents, fabric-wide lenses, a web UI, and an MCP server and agent.
+This replaces [fcli](https://github.com/srl-labs/fcli), rewritten from the ground up. It runs on asyncio throughout, uses no Nornir and makes no blocking gNMI calls. On top of fcli's reports, it adds a streaming engine with history, fabric checks grouped into incidents, fabric-wide lenses, a web UI, and an MCP server and agent.
 
 It needs Python 3.11 or later, and gNMI enabled on the nodes. It is tested against SR Linux 25.3 to 26.7.
 
@@ -18,7 +18,7 @@ uv tool install fcling          # or `pipx install fcling`; `uv tool install .` 
 Or run it with Docker, without installing anything:
 
 ```bash
-docker run --rm --network host -v "$PWD:/work" ghcr.io/wdesmedt/fcling -t lab.clab.yml bgp-peers
+docker run --rm --network host -v "$PWD:/work" ghcr.io/srl-labs/fcling -t lab.clab.yml bgp-peers
 ```
 
 Then:
