@@ -31,6 +31,7 @@ from fcli.gnmi import path as gpath
 from fcli.report import excluded
 from fcli.reports import REGISTRY
 
+from .release_coverage import SUPPORTED, release_key, release_line, table
 from .replay import load, reads_recordings, reads_state, recorded, recordings
 from .test_release_matrix import PARAMS, PORTED
 
@@ -98,33 +99,47 @@ REFUSED = {
     "l3vpn-ipv4-unicast": "the bgp-rib has l3vpn families only on a node configured for MPLS IP-VPN",
     "l3vpn-ipv6-unicast": "the bgp-rib has l3vpn families only on a node configured for MPLS IP-VPN",
     "fabric": "fixed-form platforms have no fabric cards",
-    "vxlan-interface": "a node without the vxlan feature: a spine",
-    "tunnel-interface": "a node without the vxlan feature: a spine",
-    "bgp-evpn": "a node without the evpn feature: a spine",
-    "evpn": "a node without the evpn feature: a spine",
+    "vxlan-interface": "a node without the vxlan feature: a spine, up to 26.3",
+    "tunnel-interface": "a node without the vxlan feature: a spine, up to 26.3",
+    "bgp-evpn": "a node without the evpn feature: a spine, up to 26.3",
+    "evpn": "a node without the evpn feature: a spine, up to 26.3",
+    "bgp-vpn": "a node without the evpn feature: a spine, on 26.3 alone",
 }
 
 #: Reads that a recorded node accepts but answers with nothing, by the node's
 #: recording name: it has nothing to show. A read that goes silent on a
 #: node listed here, or on a release where it answered before, means data
 #: moved - a leaf that left the state datastore answers like this.
-_NOTHING_CONFIGURED = {
+_NO_IGP = {
     "/network-instance[name=*]/protocols/isis/instance[name=*]/interface[interface-name=*]": "no IS-IS",
     "/network-instance[name=*]/protocols/ospf/instance[name=*]/area[area-id=*]/interface[interface-name=*]": (
         "no OSPF"
     ),
+}
+_NOTHING_CONFIGURED = {
+    **_NO_IGP,
     "/network-instance[name=*]/static-routes": "no static routes",
     "/network-instance[name=*]/next-hop-groups": "no static routes",
 }
 _V6_RIB = "/network-instance[name=*]/bgp-rib/afi-safi[afi-safi-name=ipv6-unicast]/ipv6-unicast"
+_SPINE = {
+    "/interface[name=lag*]": "no LAGs",
+    "/network-instance[name=*]/bridge-table/mac-table/mac": "no mac-vrfs",
+    f"{_V6_RIB}/local-rib/route": "no IPv6 BGP routes",
+    f"{_V6_RIB}/rib-in-out/rib-out-post/route": "no IPv6 BGP routes",
+}
+_UNICAST_DESTINATIONS = "/tunnel-interface[name=*]/vxlan-interface[index=*]/bridge-table/unicast-destinations"
 SILENT = {
     "nvd-25-leaf1": _NOTHING_CONFIGURED,
-    "nvd-25-spine1": {
-        **_NOTHING_CONFIGURED,
-        "/interface[name=lag*]": "no LAGs",
-        "/network-instance[name=*]/bridge-table/mac-table/mac": "no mac-vrfs",
-        f"{_V6_RIB}/local-rib/route": "no IPv6 BGP routes",
-        f"{_V6_RIB}/rib-in-out/rib-out-post/route": "no IPv6 BGP routes",
+    "nvd-25-spine1": {**_NOTHING_CONFIGURED, **_SPINE},
+    # The static route of the mgmt network-instance answers here, on every release.
+    "nvd25-leaf1": _NO_IGP,
+    "nvd25-spine1": {
+        **_NO_IGP,
+        **_SPINE,
+        # Refused up to 26.3: 26.7 no longer leaves vxlan out of a spine's schema.
+        f"{_UNICAST_DESTINATIONS}/destination": "no vxlan on a spine",
+        f"{_UNICAST_DESTINATIONS}/es-destination[esi=*]/vtep": "no vxlan on a spine",
     },
 }
 
@@ -279,3 +294,87 @@ def test_streamed_paths_recorded(path: Path) -> None:
 def test_streams_synced(path: Path) -> None:
     for stream in _data(path)["streams"]:
         assert stream.get("synced"), stream
+
+
+# --------------------------------------------------------------------------- #
+# release against release
+# --------------------------------------------------------------------------- #
+
+#: Fields of a report that one release fills and the next leaves empty, and
+#: why. Any other is a leaf that moved: the path still answers, so no refusal
+#: or silent read shows it, and a column just goes blank.
+EMPTIED: dict[tuple[str, str], str] = {}
+
+
+def _steps() -> list[tuple[Path, Path]]:
+    """Each node's recordings, a release and the one after it."""
+    by_node: dict[str, list[Path]] = defaultdict(list)
+    for path in reads_recordings():
+        by_node[_node_key(path)].append(path)
+    steps = []
+    for paths in by_node.values():
+        paths.sort(key=lambda p: release_key(p.parent.name))
+        steps += zip(paths, paths[1:], strict=False)
+    return steps
+
+
+def _filled(path: Path) -> dict[tuple[str, str], set[str]]:
+    """Per report and parameters, the record fields that hold a value in any record."""
+    out: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for entry in _data(path)["reports"]:
+        volatile = {v.partition(".")[0] for v in REGISTRY[entry["report"]].record.volatile}
+        for record in entry["records"]:
+            filled = {k for k, v in record.items() if v not in (None, "", [], {})}
+            out[entry["report"], _entry_id(entry)] |= filled - volatile
+    return out
+
+
+def _step_id(step: tuple[Path, Path]) -> str:
+    return f"{step[0].parent.name}-{step[1].parent.name}/{_node_key(step[0])}"
+
+
+@pytest.mark.parametrize("step", _steps(), ids=_step_id)
+def test_no_field_went_empty(step: tuple[Path, Path]) -> None:
+    before, after = map(_filled, step)
+    emptied = {
+        (report, field)
+        for (report, entry), fields in before.items()
+        for field in fields - after.get((report, entry), set())
+    }
+    new = emptied - set(EMPTIED)
+    assert not new, f"filled on {step[0].parent.name}, empty on {step[1].parent.name}: {sorted(new)}"
+
+
+def test_emptied_is_current() -> None:
+    """Each listed field still goes empty on some step: a stale entry would hide a new one."""
+    seen = set()
+    for step in _steps():
+        before, after = map(_filled, step)
+        for (report, entry), fields in before.items():
+            seen |= {(report, f) for f in fields - after.get((report, entry), set())}
+    assert set(EMPTIED) <= seen, sorted(set(EMPTIED) - seen)
+
+
+# --------------------------------------------------------------------------- #
+# what is covered
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("line", SUPPORTED)
+def test_supported_release_is_recorded(line: str) -> None:
+    """A supported release has a leaf and a spine, in fcling's recordings and the old ones."""
+    for paths in (recordings(), reads_recordings()):
+        names = [_node_key(p) for p in paths if release_line(p.parent.name) == line]
+        assert any("l1" in n or "leaf" in n for n in names), f"no leaf of {line}"
+        assert any("s1" in n or "spine" in n for n in names), f"no spine of {line}"
+
+
+def test_each_supported_release_is_compared() -> None:
+    """Every supported release takes part in a release-against-release comparison."""
+    compared = {release_line(p.parent.name) for step in _steps() for p in step}
+    assert set(SUPPORTED) <= compared, sorted(set(SUPPORTED) - compared)
+
+
+def test_readme_reports_coverage() -> None:
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    assert table() in readme, f"the README's release table is stale; it should read\n{table()}"

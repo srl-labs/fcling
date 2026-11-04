@@ -105,4 +105,4 @@ Every global option can also come from the environment as `FCLI_<OPTION>`: `FCLI
 
 ## SR Linux releases
 
-The reports are tested against real recordings from SR Linux 25.3 through 26.7 ([tests/fixtures/releases](../tests/fixtures/releases/MATRIX.md)). Paths that only older releases used (BGP RIB layouts before 24.10) are not supported.
+The reports are tested against real recordings from SR Linux 25.3 through 26.7 ([coverage](../README.md#sr-linux-releases), [what each recording checks](../tests/fixtures/releases/MATRIX.md)). Paths that only older releases used (BGP RIB layouts before 24.10) are not supported.
