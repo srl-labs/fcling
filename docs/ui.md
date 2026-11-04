@@ -83,7 +83,7 @@ Case doesn't matter, and the filters combine. On a report they are kept in the U
 
 ## Ask the agent
 
-**✦ Ask** opens the agent beside any view ([ai.md](ai.md)). It is told what you are looking at, such as `topology, node leaf3 selected`, `path lens source=leaf1 …` or the time you went back to, so "why is this down?" means what is on the screen. You see its tool calls as they run, then its answer, and the tokens it used. **New** starts a new conversation and **Stop** cancels one. Each question is sent to the model provider the server is configured with, and is billed to that key.
+**✦ Ask** opens the agent beside any view ([ai.md](ai.md)). It is told what you are looking at, such as `topology, node leaf3 selected`, `path lens source=leaf1 …` or the time you went back to, so "why is this down?" means what is on the screen. You see its tool calls as they run, then its answer, and the tokens it used. **New** starts a new conversation and **Stop** cancels one. Each question is sent to the model provider the server is configured with, and is billed to that key. The key has to be in the environment `fcling serve` was started with: see [Setting it up](ai.md#setting-it-up) for the variables of Claude, OpenAI and Grok. The panel shows the provider, model and effort in use once a question has been sent.
 
 ## Live, or as it was
 

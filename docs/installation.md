@@ -30,6 +30,8 @@ docker run -d --name fcling --network host -v "$PWD:/work" -v fcli-state:/state 
 
 `--network host` lets it reach containerlab nodes by their container names and keeps `fcling serve` on localhost. Without it, publish the port and listen on every address: `-p 8765:8765 ... serve --host 0.0.0.0`. Beyond localhost the server speaks HTTPS and every call needs a token. fcli makes up both a self-signed certificate and a token, keeps them next to the history so restarts keep them, and prints the UI's URL with the token in it. You can give your own with `--tls-cert`/`--tls-key` and `--api-token` instead ([server.md](server.md#security)).
 
+For the agent, pass its model provider's key into the container, as `-e ANTHROPIC_API_KEY` before the image name ([ai.md](ai.md#setting-it-up)).
+
 The package includes everything: the one-shot CLI, `fcling serve` with its HTTP API and UI, MCP, and the agent.
 
 ## Point fcli at a fabric
@@ -101,7 +103,7 @@ Every node uses the inventory's credentials. The global options override them fo
 
 ## Environment variables
 
-Every global option can also come from the environment as `FCLI_<OPTION>`: `FCLI_TOPO`, `FCLI_INVENTORY`, `FCLI_SERVER`, `FCLI_TOKEN`, `FCLI_OUTPUT` and so on. The model providers have their own variables, listed in [ai.md](ai.md).
+Every global option can also come from the environment as `FCLI_<OPTION>`: `FCLI_TOPO`, `FCLI_INVENTORY`, `FCLI_SERVER`, `FCLI_TOKEN`, `FCLI_OUTPUT` and so on. The model providers have their own variables, listed in [ai.md](ai.md#providers).
 
 ## SR Linux releases
 
