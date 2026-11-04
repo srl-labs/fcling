@@ -294,6 +294,18 @@ def test_the_provider_is_the_one_asked_for_or_the_first_with_a_key(monkeypatch: 
         raise AssertionError("an effort Grok does not take was accepted")
 
 
+def test_every_claude_key_reaches_the_client(monkeypatch: Any) -> None:
+    from fcli.llm import create
+
+    monkeypatch.setenv("CLAUDE_API_KEY", "alias")
+    assert create().client.api_key == "alias"
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "token")
+    client = create().client  # the alias is the last choice, as `Spec.keys` has it
+    assert (client.api_key, client.auth_token) == (None, "token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    assert create().client.api_key == "key"
+
+
 async def test_without_a_key_openai_says_which() -> None:
     conversation = Conversation()
     agent = Agent(FakeService(), provider="openai")
