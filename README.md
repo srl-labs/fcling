@@ -58,6 +58,7 @@ fcling config-diff leaf1 12             # what commit 12 did to leaf1's configur
 Ask, or let your own AI client ask. Both get the same 14 read-only tools: status, reports, incidents, checks, history, configuration diffs, drift, baselines, the lenses and the topology.
 
 ```bash
+export ANTHROPIC_API_KEY=...                                     # or OPENAI_API_KEY, XAI_API_KEY: for `fcling serve` too, to use Ask in the UI
 fcling ask "what is wrong, and what changed just before?"        # the first provider with a key
 fcling ask --provider openai --effort low "is BGP healthy?"
 claude mcp add --transport http fcling http://127.0.0.1:8765/mcp        # MCP over HTTP from `fcling serve`
@@ -102,7 +103,7 @@ The first column replays the Gets the original fcli made, and requires the same 
 | [History](docs/history.md) | what is kept, `--at`, commit attribution, baselines and drift |
 | [Lenses and topology](docs/lenses.md) | `where`, `path`, `service`, `endpoints`, `topology`, adding a lens |
 | [Checks and incidents](docs/checks.md) | every check, and how findings are grouped by root cause |
-| [MCP and the agent](docs/ai.md) | the tools, MCP setup, `fcling ask`, Claude, OpenAI and Grok |
+| [MCP and the agent](docs/ai.md) | the tools, MCP setup, `fcling ask`, and the variables for Claude, OpenAI and Grok |
 | [Architecture](docs/architecture.md) | how it fits together, adding a report or a check, the tests |
 
 ## How it works

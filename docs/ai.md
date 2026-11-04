@@ -65,24 +65,59 @@ The answer streams to stdout as it is written. The tool calls it makes are shown
 
 Its instructions follow the triage order: incidents first, then the history around when they started, naming the commit and user behind a change; then reports narrowed to the nodes in question. It cannot change anything, and is told never to imply that it did.
 
+### Setting it up
+
+The agent needs a key for one model provider, in the environment of the process that runs it. Nothing else has to be configured, and fcling reads no `.env` file.
+
+```bash
+export ANTHROPIC_API_KEY=...          # or OPENAI_API_KEY, or XAI_API_KEY
+fcling -t lab.clab.yml ask "is BGP healthy?"
+```
+
+Where the variables go depends on where the agent runs:
+
+| You use | Set them for |
+|---|---|
+| `fcling -t lab.clab.yml ask` | your own shell. `--provider`, `--model` and `--effort` also work. |
+| **✦ Ask** in the UI, `fcling --server URL ask`, `POST /api/chat` | the `fcling serve` process, before it starts. Restart it to change them. |
+| the container image | `docker run -e ANTHROPIC_API_KEY ...` ([installation.md](installation.md#container-image)) |
+
+Through a server, its provider, model and effort apply. `fcling --server URL ask` refuses `--provider`, `--model` and `--effort`, and also `FCLI_LLM_PROVIDER`, `FCLI_MODEL` and `FCLI_EFFORT` set in your own shell, so unset those there. The UI's agent panel shows the provider, model and effort in use once a question has been sent.
+
+Without a usable key, the question fails with a message saying which variable to set. A model the provider doesn't know fails the same way, as that provider's API error. An effort the provider doesn't take fails before anything is sent.
+
 ### Providers
 
-| Provider | How it is called | Default model | Key |
+| Provider | How it is called | Default model |
+|---|---|---|
+| Claude | Anthropic Messages API: adaptive thinking, cached system prompt and tools, refusals retried server-side on another model | `claude-opus-5-5` |
+| OpenAI | Responses API, with `store` off (the fabric's data is not kept by OpenAI) and reasoning replayed encrypted | `gpt-5.6-sol` |
+| Grok | Chat Completions at `https://api.x.ai/v1` | `grok-4.6` |
+
+The provider is `--provider` / `FCLI_LLM_PROVIDER` (`claude`, `openai` or `grok`). Otherwise it is the first with credentials, in the order Claude, OpenAI, Grok. A `~/.config/anthropic` directory, which `ant auth login` leaves, counts as Claude's credentials, so with one present set `FCLI_LLM_PROVIDER` to use another provider. Setting a key is enough to start spending on that provider's account.
+
+Each provider has its own variables. Where a cell names two, the first one set wins.
+
+| | Claude | OpenAI | Grok |
 |---|---|---|---|
-| Claude | Anthropic Messages API: adaptive thinking, cached system prompt and tools, refusals retried server-side on another model | `claude-opus-5-5` | `ANTHROPIC_API_KEY`, or `ant auth login` |
-| OpenAI | Responses API, with `store` off (the fabric's data is not kept by OpenAI) and reasoning replayed encrypted | `gpt-5.6-sol` | `OPENAI_API_KEY` |
-| Grok | Chat Completions at `https://api.x.ai/v1` | `grok-4.6` | `XAI_API_KEY` |
+| key | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` (sent as a bearer token), `CLAUDE_API_KEY`, or `ant auth login` | `OPENAI_API_KEY` | `XAI_API_KEY`, `GROK_API_KEY` |
+| model | `ANTHROPIC_MODEL`, `CLAUDE_MODEL` | `OPENAI_MODEL` | `XAI_MODEL`, `GROK_MODEL` |
+| effort | `ANTHROPIC_EFFORT`, `CLAUDE_EFFORT` | `OPENAI_REASONING_EFFORT` | `XAI_REASONING_EFFORT`, `GROK_REASONING_EFFORT` |
+| effort levels | `low` `medium` `high` `xhigh` `max` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `low` `medium` `high` `xhigh` |
+| default effort | `medium` | the model's own | the model's own |
+| endpoint | `ANTHROPIC_BASE_URL` | `OPENAI_BASE_URL` | `XAI_BASE_URL` |
+| API | Messages only | `OPENAI_API`: `responses` (default) or `chat` | `XAI_API`, `GROK_API`: `chat` (default) or `responses` |
 
-The provider is `--provider` / `FCLI_LLM_PROVIDER`; otherwise it is the first with a key, in the order Claude, OpenAI, Grok. Setting a key is enough to start spending on that provider's account.
+The model and the effort are taken from, in order: the option (`--model`, `--effort`), `FCLI_MODEL` / `FCLI_EFFORT`, the provider's own variables, the default. `FCLI_MODEL` and `FCLI_EFFORT` apply to whichever provider is chosen, so the provider's own variables are the safer place when several are configured.
 
-| Setting | Variables |
-|---|---|
-| model | `--model` / `FCLI_MODEL`, or `ANTHROPIC_MODEL`, `OPENAI_MODEL`, `XAI_MODEL` |
-| effort | `--effort` / `FCLI_EFFORT`, or `ANTHROPIC_EFFORT`, `OPENAI_REASONING_EFFORT`, `XAI_REASONING_EFFORT`. Claude defaults to `medium`; the others to the model's own default. Each provider accepts its own levels. |
-| endpoint | `OPENAI_BASE_URL`, `XAI_BASE_URL` |
-| API | `OPENAI_API=chat` for a proxy in front of OpenAI that only speaks Chat Completions |
+An endpoint that speaks OpenAI's Chat Completions, such as a proxy or a local model server, goes through the OpenAI provider. It still needs a key, even one the endpoint ignores, and the model has to be able to call tools:
 
-`fcling serve` uses whatever these variables say in its own environment.
+```bash
+export OPENAI_API_KEY=unused
+export OPENAI_BASE_URL=http://127.0.0.1:8000/v1
+export OPENAI_API=chat
+export OPENAI_MODEL=my-model
+```
 
 ### Limits
 
