@@ -223,7 +223,7 @@ class ClaudeProvider:
             # or an `ant auth login` profile. CLAUDE_API_KEY is ours: the SDK doesn't read it.
             sdk_finds = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
             alias = None if sdk_finds else os.environ.get("CLAUDE_API_KEY")
-            self._client = anthropic.AsyncAnthropic(**({"api_key": alias} if alias else {}))
+            self._client = anthropic.AsyncAnthropic(api_key=alias) if alias else anthropic.AsyncAnthropic()
         return self._client
 
     def user(self, text: str) -> Any:
