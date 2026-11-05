@@ -5,6 +5,8 @@
 
 What an SR Linux fabric looks like, what is wrong with it, and what changed, straight from gNMI.
 
+![The topology in the web UI: core, spine and leaf tiers, with two leaves flagged by their findings](https://raw.githubusercontent.com/srl-labs/fcling/main/docs/images/topology.webp)
+
 This replaces [fcli](https://github.com/srl-labs/fcli), rewritten from the ground up. It runs on asyncio throughout, uses no Nornir and makes no blocking gNMI calls. On top of fcli's reports, it adds a streaming engine with history, fabric checks grouped into incidents, fabric-wide lenses, a web UI, and an MCP server and agent.
 
 It needs Python 3.11 or later, and gNMI enabled on the nodes. It is tested against [SR Linux 25.3 to 26.7](#sr-linux-releases).
@@ -74,6 +76,14 @@ fcling -t lab.clab.yml service macvrf-102                     # one service on e
 fcling -t lab.clab.yml endpoints                              # every attached host
 fcling -t lab.clab.yml topology                               # tiers, cables, clients, segments
 ```
+
+`path` in the web UI: the trace drawn on the topology, over ECMP and the VXLAN tunnels, with every lookup in the table below it.
+
+![A path trace from leaf1 over four spines to leaf5 and leaf6, with the VXLAN tunnels as dashed arcs](https://raw.githubusercontent.com/srl-labs/fcling/main/docs/images/path.webp)
+
+A router end to end: its interfaces, BGP VPN, peers and segments on each node, with links to the ARP, ND and RIB reports.
+
+![The ipvrf-1 router across six nodes, opened on leaf1](https://raw.githubusercontent.com/srl-labs/fcling/main/docs/images/services.webp)
 
 `checks` and `incidents` work without a server too: one-shot from the nodes, or from the local history with `--at`. They exit 1 when there is an error, so they can gate a pipeline.
 
