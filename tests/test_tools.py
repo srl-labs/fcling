@@ -109,6 +109,13 @@ async def test_lens_tools_answer_in_table_rows() -> None:
         await call(FakeService(), "service_detail", {"name": "nope"})
 
 
+async def test_config_tool_takes_a_path_and_limits_lines() -> None:
+    service = FakeService()
+    answer = await _call("get_config", {"node": "leaf1", "path": "/interface", "limit": 2}, service)
+    assert answer["count"] == 5 and len(answer["rows"]) == 2 and "narrow with path" in answer["truncated"]
+    assert service.calls[-1] == ("config", ("leaf1", "/interface", None, None))
+
+
 async def test_topology_tool_is_compact() -> None:
     graph = await _call("get_topology")
     assert {n["name"]: n["tier"] for n in graph["nodes"]}["spine1"] == "spine"

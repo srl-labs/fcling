@@ -131,6 +131,18 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         ),
     ),
     Endpoint(
+        "/api/configs/lines",
+        ("GET",),
+        "config_lines",
+        "A node's kept configuration as set lines, or the part of it under path. Secrets are digests.",
+        (
+            Q("node", "The node.", required=True),
+            Q("path", "Only under this path: /network-instance[name=default]/protocols/bgp."),
+            Q("commit", "The configuration after this commit; the latest when not given.", type="integer"),
+            _AT,
+        ),
+    ),
+    Endpoint(
         "/api/baselines",
         ("GET", "POST"),
         "baselines",

@@ -15,6 +15,7 @@ All of them are read-only.
 | `get_checks` | every finding, ungrouped, with when it was raised |
 | `get_history` | what changed, with the commit likely to have caused it and whether it was configuration-related or unplanned (`origin`) |
 | `get_config_diff` | what a commit changed in a node's configuration, as `set /` lines added, removed and changed; secrets as digests. By commit id, or by `at`, when the commit was made, since ids repeat |
+| `get_config` | a node's configuration as `set /` lines, as kept after its latest commit, after a given commit or at a time: whole, or only the subtree under a path (`/network-instance[name=default]/protocols/bgp`, `*` for any key); secrets as digests |
 | `get_drift` | how the fabric differs from a baseline or time |
 | `list_baselines` | the named baselines |
 | `locate_address` | every place that knows an IP or MAC: the `where` lens ([lenses.md](lenses.md)) |

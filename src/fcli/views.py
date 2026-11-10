@@ -343,3 +343,38 @@ def config_diff(
 def configs(store: Store, nodes: Sequence[str] = ()) -> list[dict[str, Any]]:
     """The configurations kept, newest first."""
     return store.configs(nodes)
+
+
+def config_lines(
+    store: Store,
+    node: str,
+    path: str = "",
+    commit: int | None = None,
+    at: float | None = None,
+) -> dict[str, Any]:
+    """*node*'s configuration as ``set /`` lines, or the part of it under *path*.
+
+    The latest kept; the one kept after *commit*; or, with *at*, the one the
+    node had then: the last kept before it. Secrets were redacted to digests
+    before anything was kept.
+    """
+    from . import config
+
+    if at is not None:
+        kept = store.config(node, before=at)
+        wanted = f" by {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(at))}"
+    elif commit is not None:
+        kept, wanted = store.config(node, commit_id=commit), f" from commit {commit} on"
+    else:
+        kept, wanted = store.config(node), ""
+    if kept is None:
+        raise LookupError(f"no configuration of {node} kept{wanted}")
+    flat = config.flatten(kept["tree"])
+    selected = config.select(flat, path)
+    return {
+        "node": node,
+        "path": path or "/",
+        "config": _config_meta(kept),
+        "count": len(selected),
+        "lines": selected,
+    }

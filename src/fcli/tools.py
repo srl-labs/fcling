@@ -356,6 +356,41 @@ async def get_config_diff(service: Service, args: _ConfigDiffInput) -> Any:
     return {**answer, **_limited(lines, args.limit)}
 
 
+class _ConfigInput(_Input):
+    node: str = Field(description="The node, by inventory name.")
+    path: str = Field(
+        default="",
+        description="Only the part of the configuration under this path, as a gNMI path "
+        "('/network-instance[name=default]/protocols/bgp', '/interface[name=ethernet-1/1]', "
+        "'/system/aaa') or as the words of a set line ('network-instance default protocols bgp'). "
+        "'*' matches any one key value or word: '/interface[name=*]/subinterface'. "
+        "Omit for the whole configuration, which is often thousands of lines.",
+    )
+    commit: int | None = Field(
+        default=None, description="The configuration right after this commit; omit for the latest."
+    )
+    at: str | None = Field(
+        default=None,
+        description="The configuration the node had then: '2h', '2026-10-12T14:02'. Omit for the latest.",
+    )
+    limit: int = Field(default=300, ge=1, le=5000, description="At most this many lines.")
+
+
+@tool("get_config", _ConfigInput)
+async def get_config(service: Service, args: _ConfigInput) -> Any:
+    """A node's running configuration as SR Linux 'set /' lines (like 'info flat'), as kept after
+    its latest commit or as it was at a commit or time - the whole of it, or only the subtree
+    under a path in the device model. Passwords, keys and other secrets are redacted to digests."""
+    answer = await service.config(args.node, args.path, args.commit, args.at)
+    lines = answer.pop("lines")
+    out = {**answer, **_limited(lines, args.limit)}
+    if len(lines) > args.limit:
+        out["truncated"] = f"{len(lines) - args.limit} more lines not shown: narrow with path, or raise limit"
+    elif not lines and args.path:
+        out["note"] = "nothing configured under this path; check its spelling against a wider path"
+    return out
+
+
 @tool("list_baselines", _NoInput)
 async def list_baselines(service: Service, args: _NoInput) -> Any:
     """The named baselines get_drift can compare against, with when each was taken."""

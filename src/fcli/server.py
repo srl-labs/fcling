@@ -12,7 +12,7 @@
     GET  /api/history                the kept changes, oldest first, with their likely cause;
                                      ?baseline=[name] only those since a baseline;
                                      ?q=text only those it is found in
-    GET  /api/configs[/diff]         the configurations kept; what a commit changed
+    GET  /api/configs[/diff|/lines]  the configurations kept; what a commit changed; one as set lines
     GET  /api/drift                  what differs between a baseline (or time) and now
     GET|POST /api/baselines          named instants to compare against
     GET  /api/events                 server-sent events: changes and node status
@@ -426,6 +426,17 @@ def create_app(
             raise _Error(400, f"commit, base, context and seen are numbers: {exc}") from exc
         return await service.config_diff(node, commit, base, context, seen, query.get("at") or None)
 
+    async def config_lines(request: Request) -> Any:
+        query = request.query_params
+        node = query.get("node", "")
+        if not node:
+            raise _Error(400, "a configuration needs node=<node>")
+        try:
+            commit = int(query["commit"]) if query.get("commit") else None
+        except ValueError as exc:
+            raise _Error(400, f"commit is a number: {exc}") from exc
+        return await service.config(node, query.get("path", ""), commit, query.get("at") or None)
+
     async def events(request: Request) -> Response:
         reports_wanted = set(query_list(request, "report"))
         nodes_wanted = set(query_list(request, "node"))
@@ -597,6 +608,7 @@ def create_app(
         "drift": drift,
         "configs": configs,
         "config_diff": config_diff,
+        "config_lines": config_lines,
         "baselines": baselines,
         "events": events,
         "lenses": lenses,
