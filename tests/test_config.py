@@ -82,6 +82,27 @@ def test_secrets_are_digests() -> None:
     assert _kinds(config.compare(_tree(CONFIG), _tree(changed)))[0][0] == "changed"
 
 
+def test_part_of_a_configuration_by_path() -> None:
+    lines = config.flatten(_tree(CONFIG))
+    e1 = [
+        "set / interface ethernet-1/1 admin-state enable",
+        "set / interface ethernet-1/1 subinterface 0 ipv4 admin-state enable",
+    ]
+    # A gNMI path, module prefixes and all, or the words of a set line; never ethernet-1/10.
+    assert config.select(lines, "/srl_nokia-interfaces:interface[name=ethernet-1/1]") == e1
+    assert config.select(lines, "interface ethernet-1/1") == e1
+    assert config.select(lines, "/interface[name=*]/subinterface") == e1[1:]
+    assert config.select(lines, "/system/lldp") == ["set / system lldp admin-state enable"]
+    assert config.select(lines, "/") == config.select(lines, "") == lines
+    assert config.select(lines, "/interface[name=ethernet-9/9]") == []
+    # Keyed by two leaves: the first value alone, the next named.
+    words = "acl acl-filter f1 type ipv4 entry".split()
+    assert config.path_words("/acl/acl-filter[name=f1][type=ipv4]/entry") == words
+    # A secret is a digest, under a path as in the whole.
+    (password,) = config.select(lines, "/system/aaa")
+    assert "secret" not in password and "<redacted " in password
+
+
 def test_a_changed_leaf_is_one_row_side_by_side() -> None:
     after = copy.deepcopy(CONFIG)
     after["srl_nokia-interfaces:interface"][1]["description"] = "to spine1, port 3"

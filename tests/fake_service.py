@@ -115,5 +115,12 @@ class FakeService:
     ) -> dict[str, Any]:
         raise ServiceError(f"{since!r} is neither a baseline nor a time")
 
+    async def config(
+        self, node: str, path: str = "", commit: int | None = None, at: str | None = None
+    ) -> dict[str, Any]:
+        self.calls.append(("config", (node, path, commit, at)))
+        lines = [f"set / interface ethernet-1/{i} admin-state enable" for i in range(1, 6)]
+        return {"node": node, "path": path or "/", "config": None, "count": len(lines), "lines": lines}
+
     async def baselines(self) -> list[dict[str, Any]]:
         return []

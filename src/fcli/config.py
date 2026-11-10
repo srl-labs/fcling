@@ -312,6 +312,70 @@ def flatten(tree: Any, keys: Mapping[tuple[str, ...], tuple[str, ...]] | None = 
     return [line for line, _ in lines(tree, keys)]
 
 
+# --------------------------------------------------------------------------- #
+# part of a configuration
+# --------------------------------------------------------------------------- #
+
+
+def _segments(path: str) -> Iterator[str]:
+    """*path* split on the ``/`` outside its ``[...]`` predicates: ``ethernet-1/1`` stays whole."""
+    depth, start = 0, 0
+    for i, char in enumerate(path):
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth = max(depth - 1, 0)
+        elif char == "/" and not depth:
+            yield path[start:i]
+            start = i + 1
+    yield path[start:]
+
+
+_PREDICATE_PARTS = re.compile(r"\[([^=\]]+)=([^\]]*)\]")
+
+
+def path_words(path: str) -> list[str]:
+    """The words a ``set /`` line starts with under *path*.
+
+    *path* is a gNMI path, ``/network-instance[name=default]/protocols/bgp``, or the
+    words themselves as ``info flat`` prints them, ``network-instance default protocols
+    bgp``. A list entry is named by its key values: the first alone, the next as
+    ``name value``, as the lines have them. ``*`` stands for any one word.
+    """
+    text = path.strip()
+    if text.startswith("set /"):
+        text = text[len("set /") :]
+    if not text.strip(" /"):
+        return []
+    if "[" not in text and " " in text.strip():
+        return [strip_module(w) for w in text.split()]
+    words: list[str] = []
+    for segment in _segments(text):
+        if not segment.strip():
+            continue
+        name, _, rest = segment.partition("[")
+        words.append(strip_module(name.strip()))
+        for n, (key, value) in enumerate(_PREDICATE_PARTS.findall("[" + rest if rest else "")):
+            if n:
+                words.append(strip_module(key.strip()))
+            value = value.strip().strip("\"'")
+            words.append(value if value == "*" else _token(value))
+    return words
+
+
+def select(flat: Sequence[str], path: str) -> list[str]:
+    """The lines of *flat* under *path* (see :func:`path_words`); all of them for ``/``."""
+    words = path_words(path)
+    if not words:
+        return list(flat)
+    pattern = re.compile(
+        r"^set / "
+        + " ".join("[^ ]+" if w == "*" else re.escape(w).replace(r"\*", "[^ ]*") for w in words)
+        + r"(?: |$)"
+    )
+    return [line for line in flat if pattern.match(line)]
+
+
 def _lines(
     tree: Any,
     words: tuple[str, ...],

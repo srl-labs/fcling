@@ -157,6 +157,10 @@ class Service(Protocol):
         at: str | None = None,
     ) -> dict[str, Any]: ...
 
+    async def config(
+        self, node: str, path: str = "", commit: int | None = None, at: str | None = None
+    ) -> dict[str, Any]: ...
+
     async def lens(
         self, name: str, args: dict[str, Any] | None = None, at: str | None = None
     ) -> dict[str, Any]: ...
@@ -587,6 +591,16 @@ class EngineService:
         except LookupError as exc:
             raise ServiceError(str(exc)) from exc
 
+    async def config(
+        self, node: str, path: str = "", commit: int | None = None, at: str | None = None
+    ) -> dict[str, Any]:
+        try:
+            return await self._store().run(  # type: ignore[no-any-return]
+                views.config_lines, node, path, commit, _instant(at)
+            )
+        except LookupError as exc:
+            raise ServiceError(str(exc)) from exc
+
     async def _fabric(self, reports: Sequence[str], at: str | None) -> Any:
         """The fabric over *reports*: live, at an instant, or - for one not streamed - collected now."""
         when = _instant(at)
@@ -709,6 +723,15 @@ class RemoteService:
         query += [("at", at)] if at else []
         return await self._get("/api/configs/diff", query)  # type: ignore[no-any-return]
 
+    async def config(
+        self, node: str, path: str = "", commit: int | None = None, at: str | None = None
+    ) -> dict[str, Any]:
+        query = [("node", node)]
+        query += [("path", path)] if path else []
+        query += [("commit", str(commit))] if commit is not None else []
+        query += [("at", at)] if at else []
+        return await self._get("/api/configs/lines", query)  # type: ignore[no-any-return]
+
     async def lens(
         self, name: str, args: dict[str, Any] | None = None, at: str | None = None
     ) -> dict[str, Any]:
@@ -802,6 +825,9 @@ class LocalService:
         raise ServiceError(_NO_HISTORY)
 
     async def config_diff(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise ServiceError(_NO_HISTORY)
+
+    async def config(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         raise ServiceError(_NO_HISTORY)
 
     async def lens(
