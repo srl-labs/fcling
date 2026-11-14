@@ -41,6 +41,8 @@ The management port `mgmt0` and the `mgmt` network-instance are in no report, so
 | `resource_high` | CPU, memory or a forwarding table at 80% or more (or past the node's own threshold); an error from 95% |
 | `hardware_fault` | cards, fans or power supplies fitted and not working |
 | `optic_dom` | optics reporting a DOM alarm (error) or warning |
+| `vni_conflict` | an error for VXLAN next-hops the forwarding table leaves out (`down-vni-conflict`). A network-instance programs one VNI per remote VTEP, the lowest (SR Linux 25.10 on, VPN Services Guide, VXLAN). A route whose next-hop has another VNI to that VTEP stays active in the route table and shows its next-hop there, but forwards with the lowest VNI, into another network-instance on the far end, which drops it. A group with no member programmed forwards nowhere at all. This is what happens when one ip-vrf imports the routes of several tenant ip-vrfs from the same leaves, a shared-services VRF for example: leak the tenants into it locally instead. Read from the FIB, which no route table shows. |
+| `fib_nh_failed` | an error for next-hops the forwarding table could not program for lack of hardware resources (`failed`) |
 | `flapping` | something that changed state 3 or more times in 10 minutes: a session, a port, a LAG member, a MAC moving between ports, an IP changing MAC. Needs the history, so only through a server. |
 
 A containerlab node reports its host's memory and CPU, so in a lab `resource_high` on those describes the machine running the lab: it says so, and is `info` rather than a warning or an error. Forwarding tables are the node's own, and keep their severity.

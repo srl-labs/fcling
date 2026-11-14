@@ -131,7 +131,13 @@ _SPINE = {
 _UNICAST_DESTINATIONS = "/tunnel-interface[name=*]/vxlan-interface[index=*]/bridge-table/unicast-destinations"
 SILENT = {
     "nvd-25-leaf1": _NOTHING_CONFIGURED,
-    "nvd-25-spine1": {**_NOTHING_CONFIGURED, **_SPINE},
+    "nvd-25-spine1": {
+        **_NOTHING_CONFIGURED,
+        **_SPINE,
+        # Refused up to 26.3: 26.7 no longer leaves vxlan out of a spine's schema.
+        f"{_UNICAST_DESTINATIONS}/destination": "no vxlan on a spine",
+        f"{_UNICAST_DESTINATIONS}/es-destination[esi=*]/vtep": "no vxlan on a spine",
+    },
     # The static route of the mgmt network-instance answers here, on every release.
     "nvd25-leaf1": _NO_IGP,
     "nvd25-spine1": {

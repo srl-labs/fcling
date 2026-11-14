@@ -21,6 +21,7 @@ Every report is a command. It asks all selected nodes at once over gNMI and prin
 | `bgp-rib` | one BGP RIB | `-r` family, `-t` EVPN route type, `--paths`, `-d` |
 | `ipv4-rib`, `ipv6-rib` | route tables, next-hops resolved down to ports or tunnels | `-a ADDRESS` longest-prefix match |
 | `tunnel-table` | tunnels (VXLAN, LDP, SR-ISIS...) with next-hops, egress ports, labels | |
+| `fib-next-hops` | next-hops the forwarding table leaves out of hardware (`down-vni-conflict`, `failed`), with their network-instance, VTEP and VNI and the next-hop-groups they are in | |
 | `static-routes` | static routes and their next-hops | |
 | `routing-pol` | routing policies statement by statement, and the sets they use | |
 | `mac` | bridge tables | |
