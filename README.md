@@ -87,7 +87,7 @@ A router end to end: its interfaces, BGP VPN, peers and segments on each node, w
 
 `checks` and `incidents` work without a server too: one-shot from the nodes, or from the local history with `--at`. They exit 1 when there is an error, so they can gate a pipeline.
 
-Reports: `sys-info`, `config-commits`, `lldp`, `subif`, `lag`, `ifstats`, `ni`, `bgp-peers`, `bgp-rib`, `ipv4-rib`, `ipv6-rib`, `tunnel-table`, `static-routes`, `routing-pol`, `mac`, `arp`, `nd`, `irb`, `es`, `es-dest`, `vxlan`, `bfd`, `isis`, `ospf`, `resources`, `components`, `transceivers`, `services`, `bridge-domains`, `routers`. Each is a pure function from gNMI paths to typed records.
+Reports: `sys-info`, `config-commits`, `lldp`, `subif`, `lag`, `ifstats`, `ni`, `bgp-peers`, `bgp-rib`, `ipv4-rib`, `ipv6-rib`, `tunnel-table`, `fib-next-hops`, `static-routes`, `routing-pol`, `mac`, `arp`, `nd`, `irb`, `es`, `es-dest`, `vxlan`, `bfd`, `isis`, `ospf`, `resources`, `components`, `transceivers`, `services`, `bridge-domains`, `routers`. Each is a pure function from gNMI paths to typed records.
 
 ## SR Linux releases
 
@@ -96,9 +96,9 @@ Each release below is tested on every change by replaying real gNMI recordings, 
 | SR Linux | Rows match the original fcli | fcling's own reads and subscriptions |
 |---|---|---|
 | 25.3 | 25.3.2 (2 nodes) | - |
-| 25.10 | 25.10.3 (2 nodes) | 25.10.4 (3 nodes), 25.10.5 (1 node) |
+| 25.10 | 25.10.3 (2 nodes) | 25.10.4 (2 nodes), 25.10.5 (1 node) |
 | 26.3 | 26.3.1 (4 nodes) | 26.3.1 (2 nodes) |
-| 26.7 | 26.7.1 (2 nodes), 26.7.2 (2 nodes) | 26.7.2 (2 nodes) |
+| 26.7 | 26.7.1 (2 nodes), 26.7.2 (2 nodes) | 26.7.2 (4 nodes) |
 
 The first column replays the Gets the original fcli made, and requires the same rows it rendered. The second is fcling's own exchange with a live node: which paths a release refuses, which reads come back empty, whether the subscriptions sync, and which fields stop being filled from one release to the next. Layouts before 24.10 are not supported. [MATRIX.md](tests/fixtures/releases/MATRIX.md) has what each lab covers, what differs between releases, and how to record a new one.
 

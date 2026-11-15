@@ -55,6 +55,8 @@ ROOT_PRIORITY: tuple[str, ...] = (
     "es_df",
     "bgp_no_routes",
     "resource_high",
+    "fib_nh_failed",
+    "vni_conflict",
 )
 
 _PORT_CHECKS = frozenset(
@@ -71,7 +73,7 @@ _PORT_CHECKS = frozenset(
 )
 #: Checks whose subject is ``<ni>/<peer address>``.
 _SESSION_CHECKS = frozenset({"bgp_down", "bgp_af_down", "bgp_no_routes", "bfd_down", "bgp_peer_mismatch"})
-_PLATFORM_CHECKS = frozenset({"hardware_fault", "resource_high"})
+_PLATFORM_CHECKS = frozenset({"hardware_fault", "resource_high", "fib_nh_failed"})
 #: Where in a flapping record's key its port is: ``subif`` is keyed on the
 #: subinterface, ``lag`` on (lag, member), ``isis`` on (ni, instance, interface, ...).
 _FLAP_PORT = {"subif": 0, "lag": 1, "isis": 2, "ospf": 3}
@@ -97,6 +99,8 @@ _NOUNS = {
     "flapping": ("flap", "flaps"),
     "hardware_fault": ("hardware fault", "hardware faults"),
     "resource_high": ("resource running out", "resources running out"),
+    "vni_conflict": ("VNI conflict", "VNI conflicts"),
+    "fib_nh_failed": ("next-hop not programmed", "next-hops not programmed"),
     "underlay_unreachable": ("underlay route missing", "underlay routes missing"),
 }
 

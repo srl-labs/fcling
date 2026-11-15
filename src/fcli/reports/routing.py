@@ -454,3 +454,124 @@ def static_routes(node: NodeState) -> Iterator[StaticRoute]:
             next_hop_group=str(route.get("next-hop-group") or ""),
             next_hops=groups.get((ni, str(route.get("next-hop-group"))), ()),
         )
+
+
+# --------------------------------------------------------------------------- #
+# fib-next-hops
+# --------------------------------------------------------------------------- #
+
+FIB_GROUPS = "/platform/linecard[slot=*]/forwarding-complex[name=*]/fib-table/next-hop-group[index=*]"
+
+#: FIB member states that mean the route table's next-hop is not what forwards.
+#: ``down`` is not one: an unresolved group the route table also shows as such.
+#: ``down-vni-conflict``: a network-instance programs one VNI per remote VTEP,
+#: the lowest; next-hops with another VNI to that VTEP stay out of hardware
+#: (SR Linux 25.10 on, VPN Services Guide, VXLAN). ``failed``: no room in hardware.
+FIB_NOT_PROGRAMMED = ("down-vni-conflict", "failed")
+
+
+def _fib_state(value: Any) -> str:
+    """A FIB oper-state, without the module prefix a release may put on an enum."""
+    return str(value or "").rsplit(":", 1)[-1].strip().lower()
+
+
+def _unprogrammed(tree: Tree) -> Iterator[tuple[str, str, str, str]]:
+    """``(complex, group, next-hop id, state)`` of every FIB member left out of hardware."""
+    for m in tree.select("/platform/linecard/forwarding-complex/fib-table/next-hop-group"):
+        where = f"linecard {m.keys.get('linecard')}/{m.keys.get('forwarding-complex')}"
+        for member in as_list(m.value.get("next-hop")):
+            if not isinstance(member, dict) or member.get("next-hop") is None:
+                continue
+            state = _fib_state(member.get("oper-state"))
+            if state in FIB_NOT_PROGRAMMED:
+                yield where, str(m.value.get("index")), str(member["next-hop"]), state
+
+
+def _fib_follow(tree: Tree, params: Mapping[str, Any]) -> Iterable[Read]:
+    """The route-table next-hops behind the FIB members left out of hardware.
+
+    A FIB member names its next-hop by the index the route table gives it, but
+    not the network-instance it is in: asked for under every one, it answers
+    from the one that has it. Only the members in trouble are followed, a few
+    where the table holds thousands.
+    """
+    return keyed(NH_LIST, {("*", nh) for _, _, nh, _ in _unprogrammed(tree)})
+
+
+class FibNextHop(Record):
+    """Next-hops the route table uses and the forwarding table does not program,
+    one row per destination and state, with the next-hop-groups they are in."""
+
+    key: ClassVar[tuple[str, ...]] = ("component", "ni", "next_hop", "vni", "state")
+    volatile: ClassVar[tuple[str, ...]] = ("groups", "groups_down")
+
+    #: ``linecard 1/0``.
+    component: str
+    #: The network-instance the next-hop is in; empty when the route table no longer has it.
+    ni: str = ""
+    #: The VTEP, gateway or interface it leads to; its index when the route table no longer has it.
+    next_hop: str
+    #: VXLAN: the VNI it encapsulates with.
+    vni: int | None = None
+    #: ``down-vni-conflict`` or ``failed``.
+    state: str
+    #: The next-hop-groups it is a member of.
+    groups: int = 0
+    #: Of those, the groups with no member programmed: their routes forward nowhere.
+    groups_down: int = 0
+
+
+@report(
+    "fib-next-hops",
+    "Next-hops the forwarding table does not program: VNI conflicts, hardware failures",
+    record=FibNextHop,
+    reads=[Read(FIB_GROUPS)],
+    follow=_fib_follow,
+    columns=[
+        Column("component", "component"),
+        Column("NI", "ni"),
+        Column("next-hop", "next_hop"),
+        Column("vni", "vni"),
+        Column("state", "state"),
+        Column("groups", "groups"),
+        Column("all-down", "groups_down"),
+    ],
+)
+def fib_next_hops(node: NodeState) -> Iterator[FibNextHop]:
+    tree = node.tree
+    hops: dict[str, tuple[str, str, int | None]] = {}
+    for m in tree.select("/network-instance/route-table/next-hop"):
+        nh = m.value
+        tunnel = _resolving(nh, "resolving-tunnel") or nh.get("tunnel") or {}
+        address = (
+            str(nh.get("ip-address") or (tunnel.get("ip-prefix") if isinstance(tunnel, dict) else "") or "")
+            .removesuffix("/32")
+            .removesuffix("/128")
+        )
+        hops[str(nh.get("index"))] = (
+            str(m.keys.get("network-instance")),
+            address or str(nh.get("subinterface") or ""),
+            as_int(dig(nh, "vxlan-encapsulation", "vni")),
+        )
+    # A group is down when none of its members is up, whatever each says.
+    dead: set[tuple[str, str]] = set()
+    for m in tree.select("/platform/linecard/forwarding-complex/fib-table/next-hop-group"):
+        where = f"linecard {m.keys.get('linecard')}/{m.keys.get('forwarding-complex')}"
+        members = [x for x in as_list(m.value.get("next-hop")) if isinstance(x, dict)]
+        if members and not any(_fib_state(x.get("oper-state")) == "up" for x in members):
+            dead.add((where, str(m.value.get("index"))))
+    rows: dict[tuple[str, str, str, int | None, str], set[str]] = {}
+    for where, group, nh, state in _unprogrammed(tree):
+        ni, address, vni = hops.get(nh, ("", f"next-hop {nh}", None))
+        rows.setdefault((where, ni, address, vni, state), set()).add(group)
+    for (where, ni, address, vni, state), groups in sorted(rows.items(), key=lambda kv: str(kv[0])):
+        yield FibNextHop(
+            node=node.name,
+            component=where,
+            ni=ni,
+            next_hop=address,
+            vni=vni,
+            state=state,
+            groups=len(groups),
+            groups_down=sum(1 for g in groups if (where, g) in dead),
+        )

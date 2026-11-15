@@ -1090,6 +1090,59 @@ def check_optic_dom(fabric: Fabric) -> Iterator[Finding]:
 
 
 # --------------------------------------------------------------------------- #
+# the forwarding table
+# --------------------------------------------------------------------------- #
+
+
+def _groups(r: Any) -> str:
+    said = f"in {r.groups} next-hop-group{'' if r.groups == 1 else 's'}"
+    if r.groups_down:
+        said += f", {r.groups_down} with no member programmed: their routes are active and forward nowhere"
+    return said
+
+
+@check(
+    "vni_conflict", "VXLAN next-hops left out of hardware: another VNI to the same VTEP", ["fib-next-hops"]
+)
+def check_vni_conflict(fabric: Fabric) -> Iterator[Finding]:
+    """A network-instance programs one VNI per remote VTEP, the lowest. A route
+    whose next-hop has another VNI to that VTEP is active in the route table and
+    shows its next-hop there, but forwards with the lowest VNI - into another
+    network-instance on the far end, which drops it - or not at all. It comes
+    of importing several tenants' routes from the same leaves into one ip-vrf.
+    """
+    for r in fabric.get("fib-next-hops"):
+        if r.state != "down-vni-conflict":
+            continue
+        where = f"{r.ni}/{r.next_hop}" if r.ni else r.next_hop
+        yield _f(
+            "vni_conflict",
+            ERROR,
+            r.node,
+            f"{where} vni {r.vni}" if r.vni is not None else where,
+            f"VNI {r.vni} toward VTEP {r.next_hop} is not programmed in {r.ni or 'its network-instance'}:"
+            " it programs one VNI per remote VTEP, the lowest, and routes using this one forward with"
+            f" that VNI instead; {_groups(r)}",
+        )
+
+
+@check("fib_nh_failed", "Next-hops the hardware had no room for", ["fib-next-hops"])
+def check_fib_nh_failed(fabric: Fabric) -> Iterator[Finding]:
+    for r in fabric.get("fib-next-hops"):
+        if r.state != "failed":
+            continue
+        vni = f" vni {r.vni}" if r.vni is not None else ""
+        yield _f(
+            "fib_nh_failed",
+            ERROR,
+            r.node,
+            f"{r.ni}/{r.next_hop}{vni}" if r.ni else f"{r.next_hop}{vni}",
+            f"next-hop to {r.next_hop}{vni} is not programmed on {r.component}: out of hardware resources;"
+            f" {_groups(r)}",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # history
 # --------------------------------------------------------------------------- #
 

@@ -62,17 +62,24 @@ These recordings came with the BFD, IS-IS, OSPF, resources, components and
 transceivers reports, which the 4l2s recordings predate. That is why those
 reports skip on 4l2s: the 48 skipped tests.
 
-**NVD**: the 3-stage EVPN-VXLAN fabric in `~/github/3stage-nvd-25`. Four spines
-and six leaves (mixed `ixr-d2l`..`ixr-h5`), two ip-vrfs, eight mac-vrfs,
-all-active LAG and single-active multi-homing, IPv6 and BFD. `leaf1` has a
-virtual (layer-3) ethernet segment with a `next-hop`/`evi`.
+**NVD** (`nvd-25-*`): the 3-stage EVPN-VXLAN fabric in `~/github/nvd-core-3stage`
+(also checked out as `3stage-nvd-25`). Four spines and six leaves (mixed
+`ixr-d2l`..`ixr-h5`), three ip-vrfs, five mac-vrfs, all-active LAG and
+single-active multi-homing, IPv6 and BFD. `leaf1` has a virtual (layer-3)
+ethernet segment with a `next-hop`/`evi`. It is the set recorded on every
+supported release line, 25.10.4, 25.10.5 (`leaf1` only), 26.3.1 and 26.7.2,
+so it is what `test_no_field_went_empty` compares. Each release is a copy of
+the topology under another `name` and `mgmt` subnet with its images changed,
+started from the lab's startup configs. 26.3.1 refuses two things in them,
+so its copy (also used for 26.7.2) drops
+`advertise-arp-nd-only-with-mac-table-entry` and puts the
+`inter-instance-policies apply-policy` export and import policies in brackets
+(they are leaf-lists there).
 
-**nvd25**: the same design as rendered by EDA, in
-`nokia-validated-designs/validated-designs/3-stage-evpn-vxlan/build`, with spines
-on 25.10.4 and leaves on 25.10.5. Three ip-vrfs, five mac-vrfs, and a virtual
-ethernet segment on `leaf1`. The only set recorded on three release lines, so
-it is what `test_no_field_went_empty` compares. The 26.x recordings are of a copy of the
-lab, upgraded as described [below](#recording-a-release-the-lab-does-not-run).
+**nvd25** (`nvd25-*`): the same design as rendered by EDA, in
+`nokia-validated-designs/validated-designs/3-stage-evpn-vxlan/build`. Recorded
+on 26.7.2 only. Unlike the NVD set it has a static route in the `mgmt`
+network-instance, so the static-route reads answer.
 
 ## Recording fcling's reads
 
