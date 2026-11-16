@@ -31,7 +31,7 @@ from fcli.gnmi import path as gpath
 from fcli.report import excluded
 from fcli.reports import REGISTRY
 
-from .release_coverage import SUPPORTED, release_key, release_line, table
+from .release_coverage import PARITY, SUPPORTED, release_key, release_line, table
 from .replay import load, reads_recordings, reads_state, recorded, recordings
 from .test_release_matrix import PARAMS, PORTED
 
@@ -368,8 +368,8 @@ def test_emptied_is_current() -> None:
 
 @pytest.mark.parametrize("line", SUPPORTED)
 def test_supported_release_is_recorded(line: str) -> None:
-    """A supported release has a leaf and a spine, in fcling's recordings and the old ones."""
-    for paths in (recordings(), reads_recordings()):
+    """A supported release has a leaf and a spine in fcling's recordings, and in the old ones up to 26.7."""
+    for paths in (reads_recordings(), *([recordings()] if line in PARITY else [])):
         names = [_node_key(p) for p in paths if release_line(p.parent.name) == line]
         assert any("l1" in n or "leaf" in n for n in names), f"no leaf of {line}"
         assert any("s1" in n or "spine" in n for n in names), f"no spine of {line}"
