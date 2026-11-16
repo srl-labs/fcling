@@ -39,7 +39,7 @@ jobs:
       matrix:
         # Quoted: unquoted 25.10 would be read as the number 25.1. Keep to
         # SUPPORTED in tests/release_coverage.py.
-        release: ["25.10", "26.3", "26.7"]
+        release: ["25.10", "26.3", "26.7", "26.10"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

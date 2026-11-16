@@ -8,8 +8,12 @@ from pathlib import Path
 
 from .replay import reads_recordings, recordings
 
-#: The release lines a fabric is expected to run. Each has a leaf and a spine in both sets of recordings.
-SUPPORTED = ("25.10", "26.3", "26.7")
+#: The release lines a fabric is expected to run. Each has a leaf and a spine in fcling's own recordings.
+SUPPORTED = ("25.10", "26.3", "26.7", "26.10")
+
+#: The supported lines the original fcli recorded too. It is deprecated, and
+#: no longer records what the matrix replays: later lines have fcling's recordings alone.
+PARITY = ("25.10", "26.3", "26.7")
 
 
 def release_key(release: str) -> tuple[int, ...]:
