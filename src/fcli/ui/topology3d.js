@@ -36,12 +36,13 @@ function withIds(edges) {
   });
 }
 
-/** The services a scope shows: all of them, a tenant (an ip-vrf and what is routed into it), or one and what it is linked to. */
+/** The services a scope shows: all of them, a tenant (an ip-vrf and what is routed into it), or one alone. */
 function inScope(services, scope) {
   if (scope === "all") return services;
   const name = scope.slice(scope.indexOf(":") + 1);
   const picked = services.find((s) => s.name === name);
   if (!picked) return services;
+  if (scope.startsWith("service:")) return [picked];
   return services.filter((s) => s.name === name || s.linked.includes(name) || picked.linked.includes(s.name));
 }
 
@@ -51,8 +52,8 @@ function defaultScope(services) {
   return tenant ? `tenant:${tenant.name}` : `service:${services[0].name}`;
 }
 
-/** What the selection touches, as keys: n: node, l: cable pair, e: session, s: service, i: service@node, c: client, x: CE. */
-function touched(selected, graph, edges, overlay) {
+/** What the selection touches, as keys: n: node, l: cable pair, e: session, s: service, i: service@node, c: client, x: CE, g: segment. */
+function touched(selected, graph, edges, overlay, segments) {
   if (!selected) return null;
   const keep = new Set();
   const { type, id } = selected;
@@ -64,6 +65,7 @@ function touched(selected, graph, edges, overlay) {
     for (const s of overlay.services) if (s.nodes.some((n) => n.node === id)) keep.add(`i:${s.name}@${id}`);
     for (const c of graph.clients) if (c.nodes.includes(id)) keep.add(`c:${c.id}`);
     for (const s of overlay.sessions) if (s.node === id) ce(s);
+    for (const g of segments) if (g.nodes.some((n) => n.node === id)) keep.add(`g:${g.esi}`);
   } else if (type === "link") {
     const [a, b] = id.split("|");
     keep.add(`l:${id}`).add(`n:${a}`).add(`n:${b}`);
@@ -85,11 +87,25 @@ function touched(selected, graph, edges, overlay) {
     }
     for (const c of graph.clients) if (c.attachments.some((a) => a.service === id)) keep.add(`c:${c.id}`);
     for (const s of overlay.sessions) if (s.service === id || s.bridge === id) ce(s);
+    for (const g of segments) if (g.services.some((x) => x.name === id)) keep.add(`g:${g.esi}`);
   } else if (type === "client") {
     keep.add(`c:${id}`).add(`x:c:${id}`);
     const client = graph.clients.find((c) => c.id === id);
     for (const a of client?.attachments ?? []) keep.add(`n:${a.node}`).add(`i:${a.service}@${a.node}`);
     for (const s of overlay.sessions) if (s.client === id) keep.add(`i:${s.service}@${s.node}`);
+    for (const g of segments) if (g.client === id) keep.add(`g:${g.esi}`);
+  } else if (type === "segment") {
+    // A segment is of every layer: its ports and host among the cables, the services it serves above.
+    const g = segments.find((x) => x.esi === id);
+    keep.add(`g:${id}`);
+    if (g?.client) keep.add(`c:${g.client}`).add(`x:c:${g.client}`);
+    for (const n of g?.nodes ?? []) {
+      keep.add(`n:${n.node}`);
+      for (const s of g.services) keep.add(`i:${s.name}@${n.node}`);
+    }
+    for (const s of overlay.sessions) {
+      if (g?.next_hops.includes(s.peer) && g.services.some((x) => x.name === s.service)) ce(s);
+    }
   }
   return keep;
 }
@@ -102,6 +118,7 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
   const box = useRef(null);
   const edges = useMemo(() => withIds(graph.layers.underlay), [graph]);
   const overlay = graph.layers.overlay;
+  const segments = graph.layers.segments ?? [];
   const [camera, setCameraState] = useState(() => ({ ...CAMERA, ...remembered(CAMERA_KEY, {}) }));
   const setCamera = (next) => {
     setCameraState(next);
@@ -136,12 +153,15 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
   const drawnGraph = useMemo(() => {
     if (showClients) return graph;
     const keep = new Set(overlay.sessions.map((s) => s.client).filter(Boolean));
+    // A segment is drawn where its host hangs off its nodes: the multihomed hosts too, while they are few.
+    const picked = selected?.type === "segment" ? segments.filter((g) => g.esi === selected.id) : [];
+    for (const g of segments.length <= CROWD * 2 ? segments : picked) if (g.client) keep.add(g.client);
     if (selected?.type === "client") keep.add(selected.id);
     if (selected?.type === "service") {
       for (const c of graph.clients) if (c.attachments.some((a) => a.service === selected.id)) keep.add(c.id);
     }
     return { ...graph, clients: graph.clients.filter((c) => keep.has(c.id)) };
-  }, [graph, overlay, showClients, selected]);
+  }, [graph, overlay, segments, showClients, selected]);
 
   const placed = useMemo(() => {
     const base = layout(drawnGraph);
@@ -279,7 +299,7 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
   const quiet = (e) => e.stopPropagation();
 
   // ------------------------------------------------------------------ what is drawn
-  const near = useMemo(() => touched(selected, graph, edges, overlay), [selected, graph, edges, overlay]);
+  const near = useMemo(() => touched(selected, graph, edges, overlay, segments), [selected, graph, edges, overlay, segments]);
   const dim = (...keys) => (near && !keys.some((k) => near.has(k)) ? " dim" : "");
   const lit = (...keys) => (near && keys.some((k) => near.has(k)) ? " lit" : "");
   const is = (type, id) => (selected?.type === type && selected.id === id ? " selected" : "");
@@ -298,6 +318,35 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
     const c = P(layer, p.x, p.y);
     return html`<ellipse class=${cls} cx=${c.x} cy=${c.y} rx=${r} ry=${Math.max(3, r * tilt)} />`;
   };
+
+  /**
+   * A segment: a band across the lines from a host to the nodes it hangs off, near the host,
+   * as a ring round a bundle of cables is drawn. With one node, a tick across its line.
+   */
+  const band = (layer, hub, spokes, g, text) => {
+    const cut = spokes
+      .map((s) => {
+        const len = Math.hypot(s.x - hub.x, s.y - hub.y) || 1;
+        const t = Math.min(0.42, 30 / len + 0.12);
+        return { x: hub.x + (s.x - hub.x) * t, y: hub.y + (s.y - hub.y) * t, ux: (s.x - hub.x) / len, uy: (s.y - hub.y) / len };
+      })
+      .sort((a, b) => a.x - b.x || a.y - b.y);
+    if (!cut.length) return null;
+    const ends = cut.length === 1
+      ? [{ x: cut[0].x - cut[0].uy * 9, y: cut[0].y + cut[0].ux * 9 }, { x: cut[0].x + cut[0].uy * 9, y: cut[0].y - cut[0].ux * 9 }]
+      : cut;
+    const pts = ends.map((p) => P(layer, p.x, p.y));
+    const path = pts.map((p, i) => `${i ? "L" : "M"}${p.x},${p.y}`).join(" ");
+    const right = pts.reduce((a, b) => (b.x > a.x ? b : a));
+    const up = g.nodes.every((n) => n.oper === "up");
+    return html`<g class=${`segment${g.virtual ? " virtual" : ""}${up ? "" : " down"}${is("segment", g.esi)}${dim(`g:${g.esi}`)}${lit(`g:${g.esi}`)}`}
+                   onClick=${pick({ type: "segment", id: g.esi })} onPointerDown=${quiet}>
+      <path class="hit" d=${path} /><path class="band" d=${path} />
+      <text class="segment-name" x=${right.x + 7} y=${right.y + 3}>${text}</text>
+      <title>${`${g.names.join(" / ") || g.esi}\n${g.esi}\n${g.mode}${g.virtual ? ", virtual" : ""}${up ? "" : ", not up on every node"}`}</title>
+    </g>`;
+  };
+  const segmentName = (g) => `${g.names[0] || "ES"}${g.mode ? ` · ${g.mode}` : ""}`;
 
   const plane = (l) => {
     const pts = corners(l.id);
@@ -351,6 +400,14 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
             <title>${`${l.a} ${c.a_port} ↔ ${l.b} ${c.b_port}: ${c.state || "state unknown"}`}</title>`;
         })}
       </g>`);
+    }
+    for (const g of segments) {
+      const hub = !g.virtual && g.client && placed.clients.get(g.client);
+      if (!hub) continue;
+      // A host named after its segment says the name already: the band says how it is multihomed.
+      const host = graph.clients.find((c) => c.id === g.client);
+      const text = g.names.includes(host?.label) ? g.mode : segmentName(g);
+      out.push(band("physical", hub, g.nodes.map((n) => at(n.node)).filter(Boolean), g, text));
     }
     for (const n of graph.nodes) out.push(pad("physical", n, PAD, n.type || n.tier));
     for (const c of graph.clients) {
@@ -472,6 +529,27 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
         </g>`);
       }
     }
+    for (const g of segments) {
+      const served = g.services.filter((s) => names.has(s.name));
+      if (g.virtual) {
+        // No port to hang it on: it is the CE's next-hop, across the ip-vrfs that track it.
+        const s = overlay.sessions.find((x) => g.next_hops.includes(x.peer) && served.some((v) => v.name === x.service));
+        const hub = s && ces.get(s.client ? `c:${s.client}` : `${s.service}|${s.peer}`)?.to;
+        const spokes = served.flatMap((v) => g.nodes.map((n) => where(v.name, n.node))).filter(Boolean);
+        if (hub) out.push(band("overlay", hub, spokes, g, segmentName(g)));
+      }
+      if (!is("segment", g.esi)) continue;
+      // Who forwards for the segment is elected per service: marked on that service, on that node.
+      for (const v of served) {
+        for (const node of v.df) {
+          const w = where(v.name, node);
+          if (!w) continue;
+          const c = P("overlay", w.x, w.y);
+          out.push(html`<g class="df"><circle cx=${c.x} cy=${c.y} r="13" /><text x=${c.x} y=${c.y - 17}>DF</text>
+            <title>${`${node} is the designated forwarder of ${g.names[0] || g.esi} in ${v.name}`}</title></g>`);
+        }
+      }
+    }
     for (const ce of ces.values()) {
       const c = P("overlay", ce.to.x, ce.to.y);
       const click = ce.client ? { onClick: pick({ type: "client", id: ce.client.id }) } : {};
@@ -557,6 +635,7 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
           <span><i class="ln irb"></i>irb</span>
           <span><i class="ln pe-ce"></i>PE-CE BGP</span>
         </div>
+        ${segments.length > 0 && html`<div><span><i class="ln segment"></i>ethernet-segment (select one for its forwarders)</span></div>`}
         <div class="services">${shown.map((s) => html`<a class=${is("service", s.name)} onClick=${() => onSelect({ type: "service", id: s.name })}>
           <i class=${`glyph ${s.type === "ip-vrf" ? "router" : "bridge"}`} style=${`background:${colour.get(s.name)}`}></i>${s.name}</a>`)}</div>`}
         <div class="muted">Drag to turn, Shift-drag to move, scroll to zoom.</div>
@@ -598,6 +677,10 @@ function PeCe({ rows, graph, onSelect }) {
 export function LayerDetails({ selection, graph, status, checks, at, onSelect }) {
   const edges = useMemo(() => withIds(graph.layers.underlay), [graph]);
   const overlay = graph.layers.overlay;
+  const segments = graph.layers.segments ?? [];
+  const segmentChips = (rows) => rows.map(
+    (g) => html`<a class="chip" onClick=${() => onSelect({ type: "segment", id: g.esi })}>${g.names[0] || g.esi}</a>`,
+  );
   const existing = html`<${Details} selection=${selection} graph=${graph} status=${status} checks=${checks} at=${at} onSelect=${onSelect} />`;
   if (!selection) {
     const down = edges.filter((e) => e.state === "down");
@@ -608,6 +691,7 @@ export function LayerDetails({ selection, graph, status, checks, at, onSelect })
         <dt>underlay</dt><dd>${edges.length} sessions${down.length ? html`, <span class="error-text">${down.length} down</span>` : ""}</dd>
         <dt>overlay</dt><dd>${overlay.services.filter((s) => s.type === "ip-vrf").length} ip-vrfs, ${overlay.services.filter((s) => s.type === "mac-vrf").length} mac-vrfs, ${overlay.irbs.length} irbs</dd>
         <dt>PE-CE</dt><dd>${overlay.sessions.length} sessions${ce.length ? html`, <span class="error-text">${ce.length} down</span>` : ""}</dd>
+        ${segments.length > 0 && html`<dt>segments</dt><dd>${segmentChips(segments)}</dd>`}
       </dl>
       ${down.length > 0 && html`<h3>Sessions down</h3><${Sessions} rows=${down} node=${down[0].a} onSelect=${onSelect} />`}
     </div>`;
@@ -634,6 +718,41 @@ export function LayerDetails({ selection, graph, status, checks, at, onSelect })
       </table>
       <p class="muted small">A session is up when every end that reports it has it up.${e.protocol === "bgp" && !e.underlay ? " It carries EVPN alone: the overlay's control plane, between loopbacks." : ""}</p>
       ${e.protocol === "bgp" && html`<p><a href=${`#/report/bgp-peers?f.NI=${encodeURIComponent(`=${e.ni}`)}`}>All BGP peers</a></p>`}
+    </div>`;
+  }
+  if (selection.type === "segment") {
+    const g = segments.find((x) => x.esi === selection.id);
+    if (!g) return html`<div class="details"><p class="muted">That segment is not in this view.</p></div>`;
+    const client = g.client && graph.clients.find((c) => c.id === g.client);
+    const up = g.nodes.every((n) => n.oper === "up");
+    return html`<div class="details">
+      <h2>${g.names.join(" / ") || "Ethernet segment"} ${statePill(up ? "up" : "down")}</h2>
+      <dl class="facts">
+        <dt>ESI</dt><dd class="mono">${g.esi}</dd>
+        <dt>mode</dt><dd>${g.mode}${g.virtual ? " (virtual)" : ""}</dd>
+        ${client && html`<dt>host</dt><dd><a onClick=${() => onSelect({ type: "client", id: client.id })}>${client.label || client.name || client.id}</a></dd>`}
+        ${g.next_hops.length > 0 && html`<dt>next-hops</dt><dd class="mono">${g.next_hops.join(", ")}</dd>`}
+      </dl>
+      <table class="grid">
+        <thead><tr><th>node</th><th>${g.virtual ? "tracks" : "ports"}</th><th>oper</th></tr></thead>
+        <tbody>${g.nodes.map(
+          (n) => html`<tr><td><a onClick=${() => onSelect({ type: "node", id: n.node })}>${n.node}</a></td>
+            <td class="mono">${n.interfaces.join(" ") || g.next_hops.join(" ")}</td><td>${statePill(n.oper === "up" ? "up" : "down")}</td></tr>`,
+        )}</tbody>
+      </table>
+      <h3>Services and who forwards</h3>
+      ${g.services.length
+        ? html`<table class="grid">
+            <thead><tr><th>service</th><th>designated forwarder</th><th>candidates</th></tr></thead>
+            <tbody>${g.services.map((s) => {
+              const candidates = [...new Set(s.nodes.flatMap((n) => n.candidates))].sort(natural);
+              return html`<tr><td><a onClick=${() => onSelect({ type: "service", id: s.name })}>${s.name}</a></td>
+                <td>${s.df.length ? s.df.join(", ") : html`<span class="muted">none read</span>`}${s.df.length > 1 ? html` <span class="pill state-down">nodes disagree</span>` : ""}</td>
+                <td class="muted">${candidates.join(", ")}</td></tr>`;
+            })}</tbody>
+          </table>`
+        : html`<p class="muted">No service has a subinterface on it.</p>`}
+      <p class="muted small">A segment is one host's ports on several nodes. It serves every service with a subinterface on them, and a forwarder is elected for each.</p>
     </div>`;
   }
   if (selection.type === "service") {
@@ -670,6 +789,8 @@ export function LayerDetails({ selection, graph, status, checks, at, onSelect })
           )}</tbody>
         </table>`}
       ${sessions.length > 0 && html`<h3>PE-CE sessions</h3><${PeCe} rows=${sessions} graph=${graph} onSelect=${onSelect} />`}
+      ${segments.some((g) => g.services.some((x) => x.name === s.name)) &&
+      html`<h3>Ethernet segments</h3><p>${segmentChips(segments.filter((g) => g.services.some((x) => x.name === s.name)))}</p>`}
       <p><a href=${`#/lens/service?name=${encodeURIComponent(s.name)}`}>The service on every node</a></p>
     </div>`;
   }
@@ -677,7 +798,9 @@ export function LayerDetails({ selection, graph, status, checks, at, onSelect })
     const mine = edges.filter((e) => e.a === selection.id || e.b === selection.id);
     const services = overlay.services.filter((s) => s.nodes.some((n) => n.node === selection.id));
     const sessions = overlay.sessions.filter((s) => s.node === selection.id);
+    const here = segments.filter((g) => g.nodes.some((n) => n.node === selection.id));
     return html`${existing}<div class="details">
+      ${here.length > 0 && html`<h3>Ethernet segments</h3><p>${segmentChips(here)}</p>`}
       <h3>Routing sessions</h3>
       ${mine.length ? html`<${Sessions} rows=${mine} node=${selection.id} onSelect=${onSelect} />` : html`<p class="muted">None in the default instance.</p>`}
       ${services.length > 0 &&

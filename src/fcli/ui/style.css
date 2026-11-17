@@ -3446,6 +3446,66 @@ button.row-action {
   border-top-style: dashed;
 }
 
+:root {
+  --segment: #0d9488;
+}
+
+.layers .segment {
+  cursor: pointer;
+}
+
+.layers .segment .band {
+  fill: none;
+  stroke: var(--segment);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.layers .segment.down .band {
+  stroke: var(--error);
+}
+
+.layers .segment.virtual .band {
+  stroke-dasharray: 1 8;
+}
+
+.layers .segment:hover .band,
+.layers .segment.selected .band,
+.layers .segment.lit .band {
+  stroke-width: 8;
+}
+
+.layers .segment-name {
+  text-anchor: start;
+  fill: var(--segment);
+  font-size: 10.5px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+}
+
+.layers .df circle {
+  fill: none;
+  stroke: var(--segment);
+  stroke-width: 2.5;
+}
+
+.layers .df text {
+  fill: var(--segment);
+  font-size: 10px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+}
+
+.layer-legend .ln.segment {
+  border-top: 4px solid var(--segment);
+  border-radius: 2px;
+}
+
 /* After the rules above, which set an opacity of their own on risers and spans. */
 .layers .dim {
   opacity: 0.18;

@@ -17,6 +17,11 @@ cable on that port says who is there - else from whose interface or loopback
 the address is. A peer that is no node of ours is kept, with its address and
 no far end: on the underlay it is a neighbour outside the fabric, on the
 overlay a CE, matched to the client on the port the session runs over.
+
+An **ethernet-segment** is of no one layer: it is a set of ports facing one
+host, and so among the cables; it serves every service with a subinterface on
+those ports, and a forwarder is elected for each. It is listed once, with its
+client, its nodes and, per service, who was elected.
 """
 
 from __future__ import annotations
@@ -401,10 +406,69 @@ def _overlay(
     }
 
 
+def _segments(fabric: Fabric, index: Index, clients: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each ethernet-segment across the nodes it is on: the client it faces, the services it
+    serves there, and for each the node elected to forward for it."""
+    owner = index.loopback_owner
+    found: dict[str, dict[str, Any]] = {}
+    for es in fabric.get("es"):
+        if not es.esi:
+            continue
+        seg = found.setdefault(
+            es.esi,
+            {
+                "esi": es.esi,
+                "names": [],
+                "mode": es.mh_mode,
+                # A virtual segment tracks a next-hop in an ip-vrf, not a port: no place among the cables.
+                "virtual": es.type == "virtual" or (not any(es.interfaces) and bool(es.next_hops)),
+                "client": None,
+                "next_hops": [],
+                "nodes": [],
+                "services": {},
+            },
+        )
+        if es.name and es.name not in seg["names"]:
+            seg["names"].append(es.name)
+        seg["next_hops"] = sorted({*seg["next_hops"], *(nh.address for nh in es.next_hops)})
+        seg["nodes"].append({"node": es.node, "interfaces": [i for i in es.interfaces if i], "oper": es.oper})
+        for a in es.associations:
+            # Who this node has elected, as a node of ours where the candidate's address is one's loopback.
+            elected = [owner.get(c.address, c.address) for c in a.candidates if c.designated]
+            service = seg["services"].setdefault(a.ni, {"name": a.ni, "nodes": [], "df": []})
+            service["nodes"].append(
+                {
+                    "node": es.node,
+                    "df": elected[0] if elected else None,
+                    "candidates": sorted(owner.get(c.address, c.address) for c in a.candidates),
+                }
+            )
+            service["df"] = sorted({*service["df"], *elected})
+    by_esi: dict[str, str] = {}
+    for c in clients:
+        for esi in {c.get("esi"), *(a.get("esi") for a in c["attachments"])}:
+            if esi:
+                by_esi.setdefault(esi, c["id"])
+    out = []
+    for esi, seg in sorted(found.items()):
+        seg["client"] = by_esi.get(esi)
+        seg["services"] = sorted(seg["services"].values(), key=lambda s: s["name"])
+        # A service with a port on the segment and no election read for it is still one it serves.
+        named = {s["name"] for s in seg["services"]}
+        ports = {(n["node"], i) for n in seg["nodes"] for i in n["interfaces"]}
+        for (node, name), s in sorted(index.services.items()):
+            if name not in named and any((node, parent(p.name)) in ports for p in s.ports):
+                named.add(name)
+                seg["services"].append({"name": name, "nodes": [], "df": []})
+        out.append(seg)
+    return out
+
+
 def build(fabric: Fabric, index: Index, clients: Sequence[dict[str, Any]]) -> dict[str, Any]:
     addresses = _Addresses(fabric)
     sessions = list(_bgp(fabric, index, addresses))
     return {
         "underlay": _underlay(fabric, index, addresses, sessions),
         "overlay": _overlay(index, sessions, clients),
+        "segments": _segments(fabric, index, clients),
     }

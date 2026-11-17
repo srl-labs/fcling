@@ -296,7 +296,7 @@ def test_lenses_and_topology(client: TestClient) -> None:
     # The layers are more to read, and come only when asked for.
     assert "layers" not in graph
     layers = client.get("/api/topology", params={"layers": 1}).json()["layers"]
-    assert set(layers) == {"underlay", "overlay"} and set(layers["overlay"]) == {
+    assert set(layers) == {"underlay", "overlay", "segments"} and set(layers["overlay"]) == {
         "services",
         "irbs",
         "sessions",

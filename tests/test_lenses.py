@@ -796,3 +796,40 @@ def test_the_overlay_is_each_service_across_its_nodes_with_its_irbs_and_ce_sessi
         host_b,
         "up",
     )
+
+
+def test_a_segment_is_listed_once_with_its_client_and_who_forwards_for_each_service() -> None:
+    from fcli.reports.layer2 import DfCandidate, EsAssociation, EthernetSegment
+
+    full = fabric()
+    candidates = (
+        DfCandidate(address=LOOPBACK["leaf1"]),
+        DfCandidate(address=LOOPBACK["leaf2"], designated=True),
+    )
+    es = [
+        EthernetSegment(
+            node=n,
+            name="ES-A",
+            esi=ESI,
+            mh_mode="all-active",
+            oper="up",
+            interfaces=("lag1",),
+            associations=(EsAssociation(ni="macvrf-1", candidates=candidates),),
+        )
+        for n in ("leaf1", "leaf2")
+    ]
+    graph = build(dataclasses.replace(full, records={**full.records, "es": es}), layers=True)
+    (segment,) = graph["layers"]["segments"]
+    host_a = next(c["id"] for c in graph["clients"] if c["nodes"] == ["leaf1", "leaf2"])
+    assert (segment["names"], segment["virtual"], segment["client"]) == (["ES-A"], False, host_a)
+    assert [(n["node"], n["interfaces"]) for n in segment["nodes"]] == [
+        ("leaf1", ["lag1"]),
+        ("leaf2", ["lag1"]),
+    ]
+    (service,) = segment["services"]
+    # The candidates are loopbacks: named as the nodes they are.
+    assert (service["name"], service["df"]) == ("macvrf-1", ["leaf2"])
+    assert service["nodes"][0] == {"node": "leaf1", "df": "leaf2", "candidates": ["leaf1", "leaf2"]}
+    # Without an election read, the services with a port on the segment are still the ones it serves.
+    (plain,) = build(full, layers=True)["layers"]["segments"]
+    assert [s["name"] for s in plain["services"]] == ["macvrf-1"]

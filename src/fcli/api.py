@@ -182,7 +182,8 @@ ENDPOINTS: tuple[Endpoint, ...] = (
             Q(
                 "layers",
                 "1: also what runs over the cables - the underlay's routing sessions as edges, "
-                "the overlay's services, irbs and PE-CE sessions.",
+                "the overlay's services, irbs and PE-CE sessions, "
+                "the ethernet-segments and their forwarders.",
             ),
         ),
     ),
