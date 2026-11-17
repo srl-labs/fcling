@@ -185,6 +185,40 @@ def test_a_routed_path_over_vxlan() -> None:
     ]
 
 
+def test_a_tunnel_carries_its_vni_to_where_it_is_decapsulated() -> None:
+    spec = LENSES["path"]
+    run = spec.run(fabric(), source="leaf1", destination="10.1.1.20", ni="ipvrf-1")
+    assert [(h.node, h.outcome, h.vni) for h in run if h.vni is not None] == [
+        ("leaf1", "tunnel", 200),
+        ("leaf3", "endpoint-reached", 200),
+    ]
+    from fcli.render import cells
+
+    assert cells(spec, run[0])["vni"] == 200
+    assert cells(spec, run[0])["via"] == "vxlan to 10.0.0.3"
+
+
+def test_a_tunnel_resumes_in_the_instance_that_has_its_vni() -> None:
+    """The far VTEP looks a packet up by its VNI, whatever the instance is called."""
+    records = lens_fabric.records()
+    # leaf3 knows the VRF by another name, and imports nothing leaf1 exports.
+    records["services"] = [
+        s.model_copy(update={"name": "tenant-b", "import_rts": (), "export_rts": ()})
+        if (s.node, s.name) == ("leaf3", "ipvrf-1")
+        else s
+        for s in records["services"]
+    ]
+    records["ipv4-rib"] = [
+        r.model_copy(update={"ni": "tenant-b"}) if (r.node, r.ni) == ("leaf3", "ipvrf-1") else r
+        for r in records["ipv4-rib"]
+    ]
+    renamed = Fabric.of(lens_fabric.NODES, records)
+    run = LENSES["path"].run(renamed, source="leaf1", destination="10.1.1.20", ni="ipvrf-1")
+    (reached,) = [h for h in run if h.outcome == "endpoint-reached"]
+    assert (reached.node, reached.vni, reached.resumes_in) == ("leaf3", 200, "tenant-b")
+    assert run[-1].outcome == "delivered"
+
+
 def test_a_host_source_enters_on_every_leaf_of_its_segment() -> None:
     hops = _hops("10.1.1.10", "10.1.1.20")
     assert [h for h in hops if h[4] == "ingress"] == [

@@ -48,7 +48,7 @@ How the fabric would forward to an address, hop by hop. The answer comes from th
 - **Destination**: an IP is routed, and a MAC is bridged.
 - **`--ni`**: the instance to start in. Without it, the path starts in the source host's instance, or in `default` from a node.
 
-The walk follows ECMP branches. It goes into VXLAN tunnels and comes out at the node that owns the far end, then resumes in the instance that imports what the origin exports. It follows leaked routes, and a MAC behind a segment is aliased over every VTEP of that segment.
+The walk follows ECMP branches. It goes into VXLAN tunnels and comes out at the node that owns the far end, then resumes in the instance that has the VNI the tunnel encapsulates with, as the far VTEP itself picks it; where no instance is known by that VNI, in the one of the same name, else the one that imports what the origin exports. The `vni` column has that VNI on the `tunnel` hop and on the `endpoint-reached` hop that decapsulates it. It follows leaked routes, and a MAC behind a segment is aliased over every VTEP of that segment.
 
 An IP routed into an irb's subnet is delivered only when the bridge table behind the irb has its MAC on a local port. When the MAC was learned over EVPN, from a VTEP or behind a segment, the hop is `bridged`: the walk goes on in that mac-vrf, over its VNI to the VTEPs that have the host, and is delivered there. This is the hairpin a leaf makes when it has the host's subnet but no host route for it, for example when the segment does not advertise A-D routes for interface-less host routes (see the `es_ifl_host_ad` check).
 

@@ -9,8 +9,9 @@ probe's hash would take.
 A route that resolves onto a tunnel - VXLAN to a VTEP, LDP or SR to a far-end
 PE - hands the walk to the underlay, which is walked towards the tunnel's
 endpoint; there the packet is decapsulated and the walk resumes in the
-instance at the far end that matches - by name, or by the route-targets it
-imports - so a path through a gateway traces end to end. A route leaked from
+instance at the far end that matches - by the VNI the tunnel encapsulates
+with, as the far VTEP itself picks it, else by name, or by the route-targets
+it imports - so a path through a gateway traces end to end. A route leaked from
 another instance is forwarded by that instance's next-hops, and the walk
 crosses into it.
 
@@ -96,9 +97,11 @@ class Hop(Record):
     egress: str = ""
     peer: str = ""
     peer_port: str = ""
-    #: ``tunnel``: ``vxlan``, ``ldp``, ``sr-isis``...; the endpoint; the VNI.
+    #: ``tunnel``: ``vxlan``, ``ldp``, ``sr-isis``...; the endpoint.
     tunnel: str = ""
     endpoint: str = ""
+    #: VXLAN: the VNI the tunnel encapsulates with - on the ``tunnel`` hop, and on
+    #: the ``endpoint-reached`` that decapsulates it.
     vni: int | None = None
     resumes_in: str = ""
     mac: str = ""
@@ -111,7 +114,7 @@ class Hop(Record):
 
 def _via(h: Hop) -> str:
     if h.outcome == "tunnel":
-        return f"{h.tunnel} to {h.endpoint}" + (f" vni {h.vni}" if h.vni is not None else "")
+        return f"{h.tunnel} to {h.endpoint}"
     return h.egress
 
 
@@ -137,9 +140,13 @@ _COLUMNS = (
     Column("owner", "route_type"),
     Column("next-hop", "next_hop"),
     Column("via", _via),
+    Column("vni", "vni"),
     Column("then", _then),
     Column("ES", lambda h: h.segment or h.esi),
 )
+
+
+_Resume = tuple[str, str, str, int | None]
 
 
 @dataclass(frozen=True)
@@ -153,9 +160,10 @@ class _Step:
     hop: int = 0
     lookup: int = 1
     seen: tuple[str, ...] = ()
-    #: Chasing a tunnel endpoint: the instance to resume in, and the instance
-    #: on the origin node whose route-targets say which one that is.
-    resume: tuple[str, str, str] | None = None
+    #: Chasing a tunnel endpoint: the instance to resume in, the instance on
+    #: the origin node whose route-targets say which one that is, and the VNI
+    #: the tunnel encapsulates with (``None``: not VXLAN, or not known).
+    resume: _Resume | None = None
     #: Chasing a tunnel endpoint: what to look up once there, when not the
     #: destination - the MAC a routed destination was bridged to.
     inner: Any = None
@@ -166,7 +174,7 @@ class _Step:
         ni: str,
         address: Any,
         seen: tuple[str, ...],
-        resume: tuple[str, str, str] | None,
+        resume: _Resume | None,
         inner: Any = None,
     ) -> _Step:
         """The lookup after this one: on this node the next lookup, on another the next hop."""
@@ -183,8 +191,18 @@ def _peer_ni(index: Index, node: str, port: str, default: str) -> str:
     return default
 
 
-def _resume(index: Index, node: str, origin_node: str, origin_ni: str, want: str) -> str:
-    """The instance on *node* the walk resumes in: *want* by name, else one importing the origin's exports."""
+def _resume(index: Index, node: str, resume: _Resume) -> str:
+    """The instance on *node* the walk resumes in.
+
+    The one whose VNI the tunnel encapsulates with: what the far VTEP looks
+    the packet up in, whatever it is called. Where no instance is known by
+    that VNI, *want* by name, else one importing the origin's exports.
+    """
+    want, origin_node, origin_ni, vni = resume
+    if vni is not None:
+        for (n, ni), s in sorted(index.services.items()):
+            if n == node and vni in s.vnis:
+                return ni
     if (node, want) in index.services:
         return want
     origin = index.services.get((origin_node, origin_ni))
@@ -195,13 +213,13 @@ def _resume(index: Index, node: str, origin_node: str, origin_ni: str, want: str
     return ""
 
 
-def _resumes(index: Index, resume: tuple[str, str, str] | None) -> Any:
-    """What decides where a chase resumes: the instance wanted, and the origin's exports."""
+def _resumes(index: Index, resume: _Resume | None) -> Any:
+    """What decides where a chase resumes: the VNI, the instance wanted, and the origin's exports."""
     if resume is None:
         return None
-    want, origin_node, origin_ni = resume
+    want, origin_node, origin_ni, vni = resume
     origin = index.services.get((origin_node, origin_ni))
-    return want, frozenset(origin.export_rts) if origin else frozenset()
+    return want, frozenset(origin.export_rts) if origin else frozenset(), vni
 
 
 def _cable(index: Index, node: str, port: str) -> tuple[str, str] | None:
@@ -413,7 +431,7 @@ def _bridge(
         )
         address = ip(endpoint)
         if address is not None:
-            resume = (step.ni, step.node, step.ni)
+            resume = (step.ni, step.node, step.ni, entry.vni if kind == "vxlan" else None)
             pending.append(step.next(step.node, "default", address, seen, resume, step.address))
 
 
@@ -423,9 +441,8 @@ def _route(
     address = step.address
     own = str(address) in index.loopbacks.get(step.node, set())
     if step.resume is not None and own:
-        want, origin_node, origin_ni = step.resume
-        instance = _resume(index, step.node, origin_node, origin_ni, want)
-        yield Hop(**here, outcome="endpoint-reached", resumes_in=instance or "?")
+        instance = _resume(index, step.node, step.resume)
+        yield Hop(**here, outcome="endpoint-reached", resumes_in=instance or "?", vni=step.resume[3])
         if instance:
             inner = step.inner if step.inner is not None else target
             pending.append(step.next(step.node, instance, inner, seen, None))
@@ -498,7 +515,7 @@ def _route(
             )
             end = ip(endpoint)
             if end is not None:
-                resume = step.resume or (step.ni, step.node, step.ni)
+                resume = step.resume or (step.ni, step.node, step.ni, egress.vni)
                 pending.append(step.next(step.node, "default", end, seen, resume))
         else:
             yield Hop(**here, **via, outcome="unresolved", egress=egress.value)

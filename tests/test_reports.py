@@ -54,3 +54,14 @@ def test_services_carry_each_bgp_peer_session_state() -> None:
         ("10.9.0.1", "established"),
         ("10.9.0.2", "active"),
     ]
+
+
+def test_a_route_over_vxlan_shows_the_vni_its_next_hops_encapsulate_with() -> None:
+    report = REGISTRY["ipv4-rib"]
+    state = node_state(RELEASES / "26.7.1" / "clab-4l2s-l1.json.gz", "ipv4_rib")
+    rows = {(r.ni, r.prefix, r.type): cells(report, r) for r in report.run(state)}
+    over_vxlan = rows[("ipvrf-1", "10.0.1.0/24", "bgp-evpn")]
+    # One VNI for the three VTEPs of the route; none for a route out of a port.
+    assert over_vxlan["vni"] == [2001]
+    assert len(over_vxlan["itf"]) == 3
+    assert all(not row["vni"] for (ni, _, _), row in rows.items() if ni == "default")
