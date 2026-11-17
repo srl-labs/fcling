@@ -77,6 +77,10 @@ fcling -t lab.clab.yml endpoints                              # every attached h
 fcling -t lab.clab.yml topology                               # tiers, cables, clients, segments
 ```
 
+The topology in layers: the cables, the routing sessions over them and the services over those, each node in the same place on every plane. BGP is curved, IS-IS and OSPF straight; the overlay holds only the nodes that carry a service.
+
+![The dci-nvd fabric in three planes: cables and ethernet-segments, the BGP and IS-IS sessions, and four services across the leaves and gateways](https://raw.githubusercontent.com/srl-labs/fcling/main/docs/images/layers.webp)
+
 `path` in the web UI: the trace drawn on the topology, over ECMP and the VXLAN tunnels, with every lookup in the table below it.
 
 ![A path trace from leaf1 over four spines to leaf5 and leaf6, with the VXLAN tunnels as dashed arcs](https://raw.githubusercontent.com/srl-labs/fcling/main/docs/images/path.webp)

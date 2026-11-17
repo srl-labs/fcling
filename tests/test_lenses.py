@@ -775,6 +775,33 @@ def test_the_underlay_is_one_edge_per_session_whichever_end_reports_it() -> None
     ]
 
 
+def test_a_session_for_vpn_routes_alone_is_no_underlay_session() -> None:
+    from fcli.reports.bgp import BgpPeer, Family
+
+    def loopback(leaf: str, *families: str) -> BgpPeer:
+        return BgpPeer(
+            node=leaf,
+            ni="default",
+            peer=LOOPBACK["spine1"],
+            local_address=LOOPBACK[leaf],
+            state="established",
+            local_as=65000,
+            peer_as=65000,
+            families=tuple(Family(name=f) for f in families),
+        )
+
+    # Gateways peer over iBGP for EVPN and L3VPN: VPN routes both, between loopbacks.
+    peers = [
+        loopback(LEAVES[0], "evpn", "l3vpn-ipv4-unicast"),
+        loopback(LEAVES[1], "l3vpn-ipv6-unicast"),
+        loopback(LEAVES[2], "evpn", "ipv4-unicast"),
+    ]
+    full = fabric()
+    graph = build(dataclasses.replace(full, records={**full.records, "bgp-peers": peers}), layers=True)
+    edges = graph["layers"]["underlay"]
+    assert {e["a"]: e["underlay"] for e in edges} == {LEAVES[0]: False, LEAVES[1]: False, LEAVES[2]: True}
+
+
 def test_an_underlay_peer_that_is_no_node_of_ours_keeps_its_address() -> None:
     from fcli.reports.bgp import BgpPeer
     from fcli.reports.health import IsisAdjacency
