@@ -4,9 +4,10 @@ Inferred from what the nodes run, not from inventory labels:
 
 * a **gateway** has a service with two bgp-vpn instances - the WAN side of a
   stitched service;
-* a **leaf** has mac-vrfs: where services meet hosts;
-* a **spine** runs no services and is cabled to two or more leaves;
-* **core** is anything else without services - P routers, super-spines.
+* a **leaf** has a mac-vrf or ip-vrf with a sub-interface of its own in it:
+  where services meet hosts;
+* a **spine** is no leaf and is cabled to two or more leaves;
+* **core** is anything else - P routers, super-spines.
 
 Cables are LLDP adjacencies, each counted once though both ends report it,
 parallel ones folded into one link with a count. A cable LLDP no longer reports
@@ -52,7 +53,8 @@ def _tiers(fabric: Fabric, index: Index) -> dict[str, str]:
             tier[node] = "unclassified"
         elif any(s.gateway for s in mine):
             tier[node] = "gateway"
-        elif any(s.type == "mac-vrf" for s in mine):
+        elif any(p.kind != "irb" for s in mine for p in s.ports):
+            # A sub-interface of its own in a service: an irb only joins two services.
             tier[node] = "leaf"
         else:
             tier[node] = ""

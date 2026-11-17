@@ -88,9 +88,9 @@ The fabric as a graph. Tiers are inferred from what the nodes run, not from labe
 | tier | |
 |---|---|
 | `gateway` | has a service with two bgp-vpn instances: the WAN side of a stitched service |
-| `leaf` | has mac-vrfs |
-| `spine` | no services, cabled to two or more leaves |
-| `core` | anything else without services |
+| `leaf` | has a mac-vrf or ip-vrf with a sub-interface of its own in it (an irb does not count) |
+| `spine` | not a leaf, cabled to two or more leaves |
+| `core` | anything else |
 
 Cables are LLDP adjacencies. Each is counted once, and parallel cables are folded into one link with a count. A cable LLDP no longer reports but the history saw is kept as `lost`. Clients are what the services' access ports face, one per host: grouped by the name the host gives over LLDP, else by its ethernet-segment, else by its port. Each node carries its findings, and its health is `ok`, `warning` or `error`. A fabric whose parts share no cable becomes several components.
 

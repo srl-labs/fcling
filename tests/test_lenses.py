@@ -374,6 +374,30 @@ def test_topology_tiers_cables_and_clients() -> None:
     json.dumps(graph)
 
 
+def _leaf3_with(*services: Service) -> str:
+    records = lens_fabric.records()
+    records["services"] = [s for s in records["services"] if s.node != "leaf3"] + list(services)
+    graph = build(dataclasses.replace(fabric(), records=records))
+    return {n["name"]: n["tier"] for n in graph["nodes"]}["leaf3"]
+
+
+def test_a_leaf_is_a_node_with_a_subinterface_of_its_own_in_a_service() -> None:
+    default = Service(node="leaf3", name="default", type="default", oper="up")
+    routed = Port(name="ethernet-1/3.0", kind="routed", oper="up", addresses=("30.0.0.0/31",))
+    irb = Port(name="irb0.1", kind="irb", oper="up", peer_ni="macvrf-1")
+    # An ip-vrf alone, with a routed port in it, makes a leaf.
+    assert (
+        _leaf3_with(default, Service(node="leaf3", name="vrf", type="ip-vrf", oper="up", ports=(routed,)))
+        == "leaf"
+    )
+    # Services with nothing but the irb joining them do not.
+    only_irb = (
+        Service(node="leaf3", name="macvrf-1", type="mac-vrf", oper="up", ports=(irb,)),
+        Service(node="leaf3", name="vrf", type="ip-vrf", oper="up", ports=(irb,)),
+    )
+    assert _leaf3_with(default, *only_irb) == "core"
+
+
 def test_a_cable_the_history_saw_go_is_lost() -> None:
     records = lens_fabric.records()
     records["lldp"] = [n for n in records["lldp"] if "leaf3" not in (n.node, n.system_name)]
