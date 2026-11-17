@@ -280,6 +280,8 @@ _ROUTE_COLUMNS = (
         "itf",
         lambda r: [f"{h.label}@vrf:{h.ni}" if h.ni else h.label for nh in r.next_hops for h in nh.egress],
     ),
+    # The VNIs its VXLAN next-hops encapsulate with: one, unless the paths of a route differ.
+    Column("vni", lambda r: sorted({h.vni for nh in r.next_hops for h in nh.egress if h.vni is not None})),
     Column("metric", "metric"),
     Column("next-hop", lambda r: [c for c in map(_next_hop_cell, r.next_hops) if c]),
     Column("orig-vrf", "leaked_from"),
