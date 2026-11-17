@@ -10,9 +10,10 @@ import { Nav } from "./nav.js";
 import { ReportView } from "./reports.js";
 import { StatusView } from "./status.js";
 import { Details, OverlayControls, Topology, serviceOverlay, useOverlay } from "./topology.js";
+import { LayerDetails, Layers } from "./topology3d.js";
 
 /** Reports whose changes can change the topology or the incidents; the rest would only wake them up. */
-const WATCHED = ["checks", "lldp", "subif", "services", "es", "lag"];
+const WATCHED = ["checks", "lldp", "subif", "services", "es", "lag", "bgp-peers", "isis", "ospf"];
 /** Changes come in bursts: refresh once they settle, not once per change. */
 const SETTLE_MS = 1500;
 /** Rates change on every poll and are no history, so no event says so: traffic is fetched this often. */
@@ -236,6 +237,10 @@ function App() {
   const [, setTick] = useState(0);
   const atRef = useRef(at);
   atRef.current = at;
+  // The topology as three planes - cables, routing, services - rather than one; the browser remembers.
+  const [layered, setLayered] = useState(() => stored("fcli-layered", "") === "on");
+  const layeredRef = useRef(layered);
+  layeredRef.current = layered;
   const pending = useRef(null);
   const overlaySettings = useOverlay();
   const service = overlaySettings.overlay.startsWith("service:") ? overlaySettings.overlay.slice(8) : null;
@@ -250,7 +255,8 @@ function App() {
     try {
       const [s, topology, checks, incidents] = await Promise.all([
         get("/api/status"),
-        get("/api/topology", { at: when }),
+        // The layers are more to read, and are read only while they are drawn.
+        get("/api/topology", { at: when, layers: layeredRef.current ? 1 : undefined }),
         get("/api/checks", { at: when }),
         get("/api/incidents", { at: when }),
       ]);
@@ -266,7 +272,7 @@ function App() {
 
   useEffect(() => {
     load(at);
-  }, [at]);
+  }, [at, layered]);
 
   useEffect(() => {
     get("/api/reports").then(setCatalog).catch(() => setCatalog([]));
@@ -329,6 +335,14 @@ function App() {
   }, [selected]);
   const select = (selection) => go(selection ? `topology/${selection.type}/${encodeURIComponent(selection.id)}` : "topology");
   const shared = { go, at, graph: data?.topology, status, checks: data?.checks ?? [], query: route.query };
+  const toggleLayers = () => {
+    store("fcli-layered", layered ? null : "on");
+    // A session or a service is selected on the layers alone.
+    if (layered && ["session", "service"].includes(route.selection?.type)) select(null);
+    setLayered(!layered);
+  };
+  const layersButton = html`<button class=${`layers-toggle${layered ? " on" : ""}`} onClick=${toggleLayers} aria-pressed=${layered}
+                                    title=${layered ? "Back to the flat topology" : "The fabric in layers: cables, routing sessions, services"}>Layers</button>`;
 
   let page;
   if (locked) {
@@ -336,18 +350,23 @@ function App() {
   } else if (!data) {
     page = html`<main class="loading">${error ? "" : "Reading the fabric…"}</main>`;
   } else if (route.view === "topology") {
+    // Asked for and not read yet: the flat drawing stays until the layers are there.
+    const layers = layered && data.topology.layers;
+    const Panel = layers ? LayerDetails : Details;
     page = html`<main class=${`split${detailsCollapsed ? " details-collapsed" : ""}`}>
-      <${Topology} graph=${data.topology} status=${status} checks=${data.checks} selected=${route.selection} onSelect=${select}
+      ${layers
+        ? html`<${Layers} graph=${data.topology} status=${status} selected=${route.selection} onSelect=${select} toggle=${layersButton} />`
+        : html`<${Topology} graph=${data.topology} status=${status} checks=${data.checks} selected=${route.selection} onSelect=${select}
                    paint=${paint} overlay=${picked?.nodes.size ? picked : null}
-                   controls=${html`<${OverlayControls} graph=${data.topology} settings=${overlaySettings} />`} />
+                   controls=${html`${layersButton}<${OverlayControls} graph=${data.topology} settings=${overlaySettings} />`} />`}
       <aside class="details-pane">
         <button class="pane-toggle" onClick=${() => toggleDetails()} aria-expanded=${!detailsCollapsed}
                 title=${detailsCollapsed ? "Show the details panel" : "Hide the details panel"}>
           ${detailsCollapsed ? "‹" : "›"}
         </button>
         ${!detailsCollapsed &&
-        html`<${Details} selection=${route.selection} graph=${data.topology} status=${status}
-                         checks=${data.checks} at=${at} onSelect=${select} />`}
+        html`<${Panel} selection=${route.selection} graph=${data.topology} status=${status}
+                       checks=${data.checks} at=${at} onSelect=${select} />`}
       </aside>
     </main>`;
   } else if (route.view === "status") {

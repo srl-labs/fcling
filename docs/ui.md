@@ -41,6 +41,29 @@ Click a node, a cable or a client, and the panel on the right shows:
 
 Everything else dims, so you can see what the selection touches. Drag to pan, scroll to zoom, and press **Fit** to see the whole fabric. **Clients** shows or hides the clients (hidden by default; the browser remembers): hidden, they are left out of the drawing, except a selected one and those an overlay picks out, such as a service's or a path's ends. **Find** searches the nodes (by name, device type or address) and the clients (by name, label or ESI); click a match, or pick it with the arrow keys and Enter, to select it and centre the drawing on it, showing the client if they are hidden. Drag a node, a client or a tier name (spine, leaf, clients) to move it. To move several together, Shift-click them, or Shift-drag a box around them, then drag any one; a click on empty space lets them go. The browser remembers where you put them for each lab, by its name, in every drawing of it, and **Reset** puts everything back where the layout placed it.
 
+### Layers
+
+**Layers** (top left) draws the fabric as three planes stacked, each node in the same place on every one, so what a service runs on can be read down a column:
+
+| | |
+|---|---|
+| **Physical** | the nodes, each cable drawn on its own with a dot for the port at either end, and the clients |
+| **Underlay** | the routing sessions of the default network-instance, one line per session: BGP (solid), IS-IS and OSPF (dotted). Green is up, red is down: a session is up only when every end that reports it has it up. A violet halo marks a BGP session that also carries EVPN; one carrying EVPN alone, between loopbacks, is a dashed violet arc. A peer that is no node of the fabric is a stub with its address. |
+| **Overlay** | each ip-vrf (a circle) and mac-vrf (a square) on the footprint of every node that carries it, in the service's own colour, its instances joined across the nodes. A black line between a mac-vrf and an ip-vrf is the irb that routes one into the other. A dashed line from an ip-vrf to a diamond is a PE-CE BGP session and its CE. |
+
+Dotted risers tie a node's place on one plane to its place on the next. A CE is the client on the port its session runs over: for a session over an irb, the one client of that mac-vrf on that node, and where there are several, the CE is drawn by its address alone.
+
+Drag to turn the drawing, Shift-drag to move it, scroll to zoom. **gap** sets how far apart the planes stand, the checkboxes hide a plane, **Reset** turns the drawing back and **Fit** frames it again. With more than 12 services the overlay shows one tenant, an ip-vrf with the mac-vrfs routed into it; **overlay** picks another, one service, or all of them. **Clients** shows every client, not only the CEs.
+
+A click selects across the planes, and everything else dims:
+
+- **Node:** its cables, its sessions and its services, with them listed in the panel.
+- **Cable:** the sessions that run on it.
+- **Session** (a line of the underlay): the cable it runs on, and in the panel what each end says of it, the address families and BFD.
+- **Service** (a circle, a square, or its name in the legend): every node that carries it, on all three planes, what it is linked to there, its clients and its CEs; the panel lists its nodes, irbs and PE-CE sessions.
+
+The layers are read only while they are drawn (`/api/topology?layers=1`), live or at an instant in the past. The health and traffic colouring, and a path drawn by the Path lens, are on the flat topology.
+
 ## Incidents
 
 The incidents tab lists the open incidents worst first, as `fcling incidents` does. Open one to see its explanation, its root finding and its consequences, and **what changed just before**. That is the history of the incident's nodes in the 15 minutes before it started, with the configuration commit each change is attributed to. Info incidents are folded away at the bottom, and a node chip opens that node on the topology. **Ack** marks an incident as known: it leaves the counts (here, in the navigation and on the Nodes page) and folds into an Acknowledged section, until a finding joins it or it clears; **Unack** brings it back. Acknowledgements are shared by everyone using the server, and survive a restart with `fcling serve --persist-acks`.

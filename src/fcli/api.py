@@ -177,7 +177,14 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         ("GET",),
         "topology",
         "The fabric as a graph: tiers, cables, clients, segments, health.",
-        (_AT,),
+        (
+            _AT,
+            Q(
+                "layers",
+                "1: also what runs over the cables - the underlay's routing sessions as edges, "
+                "the overlay's services, irbs and PE-CE sessions.",
+            ),
+        ),
     ),
     Endpoint(
         "/api/chat",
