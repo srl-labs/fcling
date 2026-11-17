@@ -18,7 +18,7 @@ from fcli.reports.services import Port, Service
 from fcli.topology import build
 
 from . import lens_fabric
-from .lens_fabric import DUP, ESI, HOST_A, HOST_B, fabric
+from .lens_fabric import DUP, ESI, HOST_A, HOST_B, LEAVES, LOOPBACK, UPLINK, fabric
 
 
 def _run(lens: str, /, **args: str) -> list:
@@ -677,3 +677,159 @@ def test_where_queries_the_rt5s_of_the_prefixes_an_ip_is_routed_by_over_evpn() -
     assert where.queried(fabric(), address="10.9.9.9") == []
     assert where.queried(fabric(), address=HOST_A) == []
     assert LENSES["path"].queried(fabric(), source="leaf1", destination="10.1.1.20") == []
+
+
+# --------------------------------------------------------------------------- layers
+
+
+def _layered(**more: list) -> dict:
+    from fcli.reports.bgp import BgpPeer, Family
+
+    full = fabric()
+    unicast = (Family(name="ipv4-unicast"),)
+    evpn = (Family(name="evpn"),)
+    peers = []
+    for leaf in LEAVES:
+        # Unnumbered eBGP up each cable, seen from both ends; EVPN between loopbacks, from the leaf alone.
+        peers += [
+            BgpPeer(
+                node=leaf,
+                ni="default",
+                peer="fe80::10%ethernet-1/49.0",
+                state="established",
+                local_as=65001,
+                peer_as=65100,
+                families=unicast,
+            ),
+            BgpPeer(
+                node="spine1",
+                ni="default",
+                peer=f"fe80::1%{UPLINK[leaf]}.0",
+                state="established" if leaf != "leaf3" else "active",
+                local_as=65100,
+                peer_as=65001,
+                families=unicast,
+            ),
+            BgpPeer(
+                node=leaf,
+                ni="default",
+                peer=LOOPBACK["spine1"],
+                local_address=LOOPBACK[leaf],
+                state="established",
+                local_as=65000,
+                peer_as=65000,
+                families=evpn,
+            ),
+        ]
+    records = {**full.records, "bgp-peers": peers, **more}
+    return build(dataclasses.replace(full, records=records), layers=True)["layers"]
+
+
+def test_the_underlay_is_one_edge_per_session_whichever_end_reports_it() -> None:
+    edges = _layered()["underlay"]
+    hop = [e for e in edges if e["underlay"]]
+    assert [(e["a"], e["b"], e["a_port"], e["b_port"], e["state"], e["kind"]) for e in hop] == [
+        ("leaf1", "spine1", "ethernet-1/49", "ethernet-1/1", "up", "ebgp"),
+        ("leaf2", "spine1", "ethernet-1/49", "ethernet-1/2", "up", "ebgp"),
+        # Up on the leaf, active on the spine: a session is down unless both ends have it up.
+        ("leaf3", "spine1", "ethernet-1/49", "ethernet-1/3", "down", "ebgp"),
+    ]
+    assert hop[2]["a_state"] == "established" and hop[2]["b_state"] == "active"
+    overlay = [e for e in edges if e["evpn"]]
+    assert [(e["a"], e["b"], e["a_port"], e["kind"], e["underlay"]) for e in overlay] == [
+        (leaf, "spine1", "", "ibgp", False) for leaf in LEAVES
+    ]
+
+
+def test_an_underlay_peer_that_is_no_node_of_ours_keeps_its_address() -> None:
+    from fcli.reports.bgp import BgpPeer
+    from fcli.reports.health import IsisAdjacency
+
+    outside = BgpPeer(
+        node="spine1", ni="default", peer="192.0.2.1", state="idle", local_as=65100, peer_as=64999
+    )
+    isis = [
+        IsisAdjacency(
+            node="leaf1", ni="default", instance="i1", interface="ethernet-1/49.0", level="L2", state="up"
+        ),
+        # The spine's interface is there, the adjacency is not.
+        IsisAdjacency(node="spine1", ni="default", instance="i1", interface="ethernet-1/1.0"),
+        IsisAdjacency(node="leaf1", ni="default", instance="i1", interface="system0.0", passive=True),
+    ]
+    full = fabric()
+    graph = build(
+        dataclasses.replace(full, records={**full.records, "bgp-peers": [outside], "isis": isis}), layers=True
+    )
+    bgp, adjacency = graph["layers"]["underlay"]
+    assert (bgp["a"], bgp["b"], bgp["peer"], bgp["state"]) == ("spine1", None, "192.0.2.1", "down")
+    assert (adjacency["protocol"], adjacency["a"], adjacency["b"], adjacency["state"]) == (
+        "isis",
+        "leaf1",
+        "spine1",
+        "down",
+    )
+    assert "layers" not in build(full)
+
+
+def test_the_overlay_is_each_service_across_its_nodes_with_its_irbs_and_ce_sessions() -> None:
+    from fcli.reports.bgp import BgpPeer
+
+    ce = BgpPeer(
+        node="leaf3", ni="ipvrf-1", peer="10.1.1.20", state="established", local_as=65001, peer_as=64512
+    )
+    full = fabric()
+    graph = build(dataclasses.replace(full, records={**full.records, "bgp-peers": [ce]}), layers=True)
+    overlay = graph["layers"]["overlay"]
+    by_name = {s["name"]: s for s in overlay["services"]}
+    assert [s["name"] for s in overlay["services"]][0] == "ipvrf-1"
+    assert by_name["macvrf-1"]["type"] == "mac-vrf" and by_name["macvrf-1"]["linked"] == ["ipvrf-1"]
+    assert [n["node"] for n in by_name["macvrf-1"]["nodes"]] == list(LEAVES)
+    assert {(i["node"], i["mac_vrf"], i["ip_vrf"], i["interface"]) for i in overlay["irbs"]} == {
+        (leaf, "macvrf-1", "ipvrf-1", "irb0.1") for leaf in LEAVES
+    }
+    (session,) = overlay["sessions"]
+    # Host B is the one client behind leaf3's irb: the CE the session is with.
+    host_b = next(c["id"] for c in graph["clients"] if c["nodes"] == ["leaf3"])
+    assert (session["via"], session["bridge"], session["client"], session["state"]) == (
+        "irb0.1",
+        "macvrf-1",
+        host_b,
+        "up",
+    )
+
+
+def test_a_segment_is_listed_once_with_its_client_and_who_forwards_for_each_service() -> None:
+    from fcli.reports.layer2 import DfCandidate, EsAssociation, EthernetSegment
+
+    full = fabric()
+    candidates = (
+        DfCandidate(address=LOOPBACK["leaf1"]),
+        DfCandidate(address=LOOPBACK["leaf2"], designated=True),
+    )
+    es = [
+        EthernetSegment(
+            node=n,
+            name="ES-A",
+            esi=ESI,
+            mh_mode="all-active",
+            oper="up",
+            interfaces=("lag1",),
+            associations=(EsAssociation(ni="macvrf-1", candidates=candidates),),
+        )
+        for n in ("leaf1", "leaf2")
+    ]
+    graph = build(dataclasses.replace(full, records={**full.records, "es": es}), layers=True)
+    (segment,) = graph["layers"]["segments"]
+    host_a = next(c["id"] for c in graph["clients"] if c["nodes"] == ["leaf1", "leaf2"])
+    assert (segment["names"], segment["virtual"], segment["client"]) == (["ES-A"], False, host_a)
+    assert [(n["node"], n["interfaces"]) for n in segment["nodes"]] == [
+        ("leaf1", ["lag1"]),
+        ("leaf2", ["lag1"]),
+    ]
+    (service,) = segment["services"]
+    # The candidates are loopbacks: named as the nodes they are.
+    assert (service["name"], service["df"]) == ("macvrf-1", ["leaf2"])
+    assert service["nodes"][0] == {"node": "leaf1", "df": "leaf2", "candidates": ["leaf1", "leaf2"]}
+    # Without an election read, the services with a port on the segment are still the ones it serves.
+    (plain,) = build(full, layers=True)["layers"]["segments"]
+    assert [s["name"] for s in plain["services"]] == ["macvrf-1"]

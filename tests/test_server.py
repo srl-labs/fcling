@@ -293,6 +293,14 @@ def test_lenses_and_topology(client: TestClient) -> None:
     assert missing.status_code == 400 and "needs address" in missing.json()["error"]
     graph = client.get("/api/topology").json()
     assert [n["name"] for n in graph["nodes"]] == ["leaf1"]
+    # The layers are more to read, and come only when asked for.
+    assert "layers" not in graph
+    layers = client.get("/api/topology", params={"layers": 1}).json()["layers"]
+    assert set(layers) == {"underlay", "overlay", "segments"} and set(layers["overlay"]) == {
+        "services",
+        "irbs",
+        "sessions",
+    }
 
 
 def test_the_ui_is_served_and_needs_no_token(target: FakeTarget, tmp_path: Path) -> None:

@@ -33,10 +33,15 @@ from typing import Any
 
 from .checks import ERROR, WARNING, Finding
 from .fabric import Fabric, out_of_band, parent
+from .layers import REQUIRES as LAYER_READS
+from .layers import build as build_layers
 from .lenses.common import Index
 
 #: What the topology reads.
 REQUIRES = ("services", "lldp", "lag", "subif", "es", "ifstats", "sys-info", "ni")
+
+#: With the layers - the underlay's sessions, the overlay's services - these too.
+LAYERS = LAYER_READS
 
 #: Top down, as drawn: the WAN core above the gateways out to it.
 TIERS = ("core", "gateway", "spine", "leaf", "unclassified")
@@ -120,7 +125,9 @@ def _name(members: list[str], position: int) -> str:
     return prefix if len(prefix) >= 2 else f"fabric {position}"
 
 
-def build(fabric: Fabric, findings: Sequence[Finding] = (), name: str = "") -> dict[str, Any]:
+def build(
+    fabric: Fabric, findings: Sequence[Finding] = (), name: str = "", layers: bool = False
+) -> dict[str, Any]:
     index = Index(fabric)
     tier = _tiers(fabric, index)
     ports = _port_state(fabric)
@@ -270,7 +277,7 @@ def build(fabric: Fabric, findings: Sequence[Finding] = (), name: str = "") -> d
     components = _components(fabric.nodes, links)
     attached = [c for c in components if len(c) > 1]
     loose = sorted(n for c in components if len(c) == 1 for n in c)
-    return {
+    graph: dict[str, Any] = {
         "nodes": [
             {
                 "name": n,
@@ -300,6 +307,10 @@ def build(fabric: Fabric, findings: Sequence[Finding] = (), name: str = "") -> d
         ]
         + ([{"name": "unattached", "nodes": loose}] if loose else []),
     }
+    if layers:
+        # What runs over the cables, and over that: read only when asked for.
+        graph["layers"] = build_layers(fabric, index, graph["clients"])
+    return graph
 
 
 _ORDER = {"": 0, "up": 1, "unknown": 2, "mixed": 3, "down": 4, "lost": 5}

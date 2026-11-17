@@ -596,7 +596,7 @@ export function searchTopology(graph, text, limit = 12) {
   ].slice(0, limit);
 }
 
-function Search({ graph, onPick }) {
+export function Search({ graph, onPick }) {
   const [text, setText] = useState("");
   const [active, setActive] = useState(0);
   const hits = useMemo(() => searchTopology(graph, text), [graph, text]);
@@ -842,7 +842,7 @@ const MOVES = "fcli-layout";
 /** Whether the clients are drawn: hidden unless asked for. */
 const CLIENTS = "fcli-clients";
 
-function remembered(key, fallback) {
+export function remembered(key, fallback) {
   try {
     return JSON.parse(localStorage.getItem(key)) ?? fallback;
   } catch {
@@ -850,7 +850,7 @@ function remembered(key, fallback) {
   }
 }
 
-function remember(key, value) {
+export function remember(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {

@@ -165,7 +165,7 @@ class Service(Protocol):
         self, name: str, args: dict[str, Any] | None = None, at: str | None = None
     ) -> dict[str, Any]: ...
 
-    async def topology(self, at: str | None = None) -> dict[str, Any]: ...
+    async def topology(self, at: str | None = None, layers: bool = False) -> dict[str, Any]: ...
 
 
 def _lens(name: str) -> Any:
@@ -196,10 +196,16 @@ def _run_lens(spec: Any, fabric: Any, args: dict[str, Any] | None) -> list[dict[
         raise ServiceError(str(exc)) from exc
 
 
-def _topology(fabric: Any, findings: Any, name: str) -> dict[str, Any]:
+def _topology(fabric: Any, findings: Any, name: str, layers: bool = False) -> dict[str, Any]:
     from .topology import build
 
-    return build(fabric, findings, name)
+    return build(fabric, findings, name, layers)
+
+
+def _topology_reads(layers: bool) -> tuple[str, ...]:
+    from .topology import LAYERS, REQUIRES
+
+    return (*REQUIRES, *LAYERS) if layers else REQUIRES
 
 
 def select_nodes(fabric: Inventory, filters: Sequence[str], nodes: Sequence[str]) -> list[str]:
@@ -620,16 +626,15 @@ class EngineService:
         queried = await views.queried_now(self.fabric.nodes, queries, self.rpc_timeout)
         return {"lens": name, "records": _run_lens(spec, views.with_records(fabric, queried), args)}
 
-    async def topology(self, at: str | None = None) -> dict[str, Any]:
-        from .topology import REQUIRES
-
+    async def topology(self, at: str | None = None, layers: bool = False) -> dict[str, Any]:
+        reads = _topology_reads(layers)
         if at is None:
-            fabric = await self._fabric(REQUIRES, None)
+            fabric = await self._fabric(reads, None)
             findings = [f for f in self.engine.current("checks") if isinstance(f, Finding)]
         else:
-            fabric = await self._fabric(sorted({*REQUIRES, *required()}), at)
+            fabric = await self._fabric(sorted({*reads, *required()}), at)
             findings = run_checks(fabric)
-        return _topology(fabric, findings, self.fabric.name)
+        return _topology(fabric, findings, self.fabric.name, layers)
 
 
 # --------------------------------------------------------------------------- #
@@ -739,8 +744,9 @@ class RemoteService:
         query += [("at", at)] if at else []
         return await self._get(f"/api/lenses/{name}", query)  # type: ignore[no-any-return]
 
-    async def topology(self, at: str | None = None) -> dict[str, Any]:
-        return await self._get("/api/topology", [("at", at)] if at else [])  # type: ignore[no-any-return]
+    async def topology(self, at: str | None = None, layers: bool = False) -> dict[str, Any]:
+        query = ([("at", at)] if at else []) + ([("layers", "1")] if layers else [])
+        return await self._get("/api/topology", query)  # type: ignore[no-any-return]
 
 
 # --------------------------------------------------------------------------- #
@@ -841,10 +847,9 @@ class LocalService:
         queried = await views.queried_now(self.fabric.nodes, queries, self.rpc_timeout)
         return {"lens": name, "records": _run_lens(spec, views.with_records(fabric, queried), args)}
 
-    async def topology(self, at: str | None = None) -> dict[str, Any]:
-        from .topology import REQUIRES
-
+    async def topology(self, at: str | None = None, layers: bool = False) -> dict[str, Any]:
         if at:
             raise ServiceError(_NO_HISTORY)
-        fabric = await views.fabric_now(self.fabric.nodes, sorted({*REQUIRES, *required()}), self.rpc_timeout)
-        return _topology(fabric, run_checks(fabric), self.fabric.name)
+        reads = sorted({*_topology_reads(layers), *required()})
+        fabric = await views.fabric_now(self.fabric.nodes, reads, self.rpc_timeout)
+        return _topology(fabric, run_checks(fabric), self.fabric.name, layers)

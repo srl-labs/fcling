@@ -41,12 +41,12 @@ class FakeService:
         except LensError as exc:
             raise ServiceError(str(exc)) from exc
 
-    async def topology(self, at: str | None = None) -> dict[str, Any]:
+    async def topology(self, at: str | None = None, layers: bool = False) -> dict[str, Any]:
         from fcli.topology import build
 
         from .lens_fabric import fabric
 
-        return build(fabric(), name="lab")
+        return build(fabric(), name="lab", layers=layers)
 
     async def status(self) -> dict[str, Any]:
         return {"fabric": "lab", "nodes": [{"name": "leaf1", "status": "live"}], "streamed": ["bgp-peers"]}

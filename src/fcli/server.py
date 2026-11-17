@@ -17,7 +17,8 @@
     GET|POST /api/baselines          named instants to compare against
     GET  /api/events                 server-sent events: changes and node status
     GET  /api/lenses[/{name}]        where, path, service, endpoints: questions about the whole fabric
-    GET  /api/topology               the fabric as a graph: tiers, cables, clients, segments, health
+    GET  /api/topology               the fabric as a graph: tiers, cables, clients, segments, health;
+                                     ?layers=1 adds the underlay's sessions and the overlay's services
     POST /api/chat                   ask the agent; its answer as server-sent events
          /mcp                        the agent's tools, for any MCP client (streamable HTTP)
     GET  /                           the web UI: topology and incidents, over this same API
@@ -524,7 +525,8 @@ def create_app(
         return await _table(LENSES[name], answer, request)
 
     async def topology(request: Request) -> Any:
-        return await service.topology(request.query_params.get("at"))
+        layers = request.query_params.get("layers", "") not in ("", "0", "false")
+        return await service.topology(request.query_params.get("at"), layers)
 
     conversations: Any = None
     agent: Any = None

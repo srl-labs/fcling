@@ -3037,3 +3037,480 @@ button.row-action {
   padding: 1px 8px;
   white-space: nowrap;
 }
+
+/* ------------------------------------------------------------------ layers */
+
+.map-controls .layers-toggle {
+  font-size: 13px;
+  padding: 2px 10px;
+}
+
+.map-controls .layers-toggle.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.layers .map-controls input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.layers .map-controls input[type="range"] {
+  width: 90px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.layers .plane polygon {
+  fill: color-mix(in srgb, var(--panel) 62%, transparent);
+  stroke: var(--edge);
+  /* A plane is no thing to click: what is under it must still be reached through it. */
+  pointer-events: none;
+  stroke-width: 1;
+}
+
+.layers .plane-underlay polygon {
+  fill: color-mix(in srgb, var(--ok-soft) 42%, transparent);
+}
+
+.layers .plane-overlay polygon {
+  fill: color-mix(in srgb, var(--config-soft) 42%, transparent);
+}
+
+.layers .plane-title,
+.layers .plane-note {
+  text-anchor: end;
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.layers .plane-note {
+  fill: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.layers .riser {
+  fill: none;
+  stroke: var(--edge);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.layers .riser.lit {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 1;
+}
+
+.layers .pad,
+.layers .host,
+.layers .instance,
+.layers .session,
+.layers .cable-group,
+.layers .ce {
+  cursor: pointer;
+}
+
+.layers .pad .foot {
+  fill: var(--panel);
+  stroke: var(--edge);
+  stroke-width: 1.5;
+}
+
+.layers .layer-overlay .pad .foot {
+  fill: color-mix(in srgb, var(--panel) 70%, transparent);
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+}
+
+.layers .pad.health-ok .foot {
+  stroke: var(--ok);
+}
+
+.layers .pad.health-warning .foot {
+  stroke: var(--warning);
+  fill: var(--warning-soft);
+}
+
+.layers .pad.health-error .foot {
+  stroke: var(--error);
+  fill: var(--error-soft);
+}
+
+.layers .pad.health-down .foot {
+  stroke: var(--down);
+  stroke-dasharray: 4 3;
+}
+
+.layers .pad:hover .foot,
+.layers .pad.selected .foot {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.layers text {
+  text-anchor: middle;
+  fill: var(--text);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.layers .pad .name,
+.layers .ce .name {
+  font-weight: 600;
+}
+
+.layers .layer-underlay .pad .name,
+.layers .layer-overlay .pad .name {
+  font-weight: 400;
+  fill: var(--muted);
+}
+
+.layers .sub {
+  fill: var(--muted);
+  font-size: 10px;
+  font-family: var(--mono);
+}
+
+.layers .hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+}
+
+.layers .cable,
+.layers .attach {
+  fill: none;
+  stroke: var(--edge);
+  stroke-width: 1.6;
+}
+
+.layers .attach {
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.layers .cable.state-mixed {
+  stroke: var(--warning);
+}
+
+.layers .cable.state-down,
+.layers .cable.state-lost {
+  stroke: var(--error);
+}
+
+.layers .cable.state-lost,
+.layers .cable.state-unknown {
+  stroke-dasharray: 5 4;
+}
+
+.layers .cable-group:hover .cable,
+.layers .cable-group.selected .cable,
+.layers .cable-group.lit .cable {
+  stroke-width: 3;
+}
+
+.layers .cable-group.selected .cable.state-up {
+  stroke: var(--accent);
+}
+
+.layers .port {
+  fill: var(--panel);
+  stroke: var(--text);
+  stroke-width: 1.2;
+}
+
+.layers .port-name,
+.layers .peer {
+  text-anchor: start;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  fill: var(--muted);
+}
+
+.layers .host rect {
+  fill: var(--panel);
+  stroke: var(--edge);
+}
+
+.layers .host:hover rect,
+.layers .host.selected rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.layers .session .wire {
+  fill: none;
+  stroke: var(--ok);
+  stroke-width: 2;
+}
+
+.layers .session .halo {
+  fill: none;
+  stroke: var(--config);
+  stroke-width: 7;
+  opacity: 0.28;
+}
+
+.layers .session.evpn-only .wire {
+  stroke: var(--config);
+  stroke-dasharray: 6 4;
+}
+
+.layers .session.isis .wire,
+.layers .session.ospf .wire {
+  stroke-dasharray: 2 4;
+  stroke-linecap: round;
+}
+
+.layers .session.state-down .wire {
+  stroke: var(--error);
+}
+
+.layers .session.state-unknown .wire {
+  stroke: var(--down);
+}
+
+.layers .session:hover .wire,
+.layers .session.selected .wire,
+.layers .session.lit .wire {
+  stroke-width: 4;
+}
+
+.layers .session .outside {
+  fill: var(--panel);
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+
+.layers .span {
+  fill: none;
+  stroke-width: 1.5;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.layers .span.lit {
+  stroke-width: 3;
+  opacity: 0.9;
+}
+
+.layers .irb {
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 1.6;
+}
+
+.layers .irb.down {
+  stroke: var(--error);
+  stroke-dasharray: 3 3;
+}
+
+.layers .pe-ce {
+  fill: none;
+  stroke: var(--ok);
+  stroke-width: 1.6;
+  stroke-dasharray: 5 3;
+}
+
+.layers .pe-ce.state-down {
+  stroke: var(--error);
+}
+
+.layers .instance circle,
+.layers .instance rect {
+  stroke: var(--panel);
+  stroke-width: 1.5;
+}
+
+.layers .instance .mark {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.layers .instance.degraded circle,
+.layers .instance.degraded rect {
+  stroke: var(--warning);
+  stroke-width: 2.5;
+}
+
+.layers .instance.down circle,
+.layers .instance.down rect {
+  stroke: var(--error);
+  stroke-width: 2.5;
+}
+
+.layers .instance:hover circle,
+.layers .instance:hover rect,
+.layers .instance.selected circle,
+.layers .instance.selected rect {
+  stroke: var(--text);
+  stroke-width: 2.5;
+}
+
+.layers .service-name {
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+}
+
+.layers .ce rect {
+  fill: var(--panel);
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.layer-legend {
+  flex-direction: column;
+  gap: 4px;
+  max-width: min(560px, calc(100% - 24px));
+  cursor: default;
+}
+
+.layer-legend > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.layer-legend .services {
+  max-height: 68px;
+  overflow-y: auto;
+}
+
+.layer-legend .services a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.layer-legend .services a.selected {
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.layer-legend .glyph {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  background: var(--muted);
+}
+
+.layer-legend .glyph.router {
+  border-radius: 50%;
+}
+
+.layer-legend .glyph.bridge {
+  border-radius: 3px;
+}
+
+.layer-legend .ln {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  border-top: 2px solid var(--ok);
+}
+
+.layer-legend .ln.session-down {
+  border-top-color: var(--error);
+}
+
+.layer-legend .ln.session-evpn {
+  border-top: 2px solid var(--ok);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--config) 30%, transparent);
+}
+
+.layer-legend .ln.session-igp {
+  border-top-style: dotted;
+}
+
+.layer-legend .ln.irb {
+  border-top-color: var(--text);
+}
+
+.layer-legend .ln.pe-ce {
+  border-top-style: dashed;
+}
+
+:root {
+  --segment: #0d9488;
+}
+
+.layers .segment {
+  cursor: pointer;
+}
+
+.layers .segment .band {
+  fill: none;
+  stroke: var(--segment);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.layers .segment.down .band {
+  stroke: var(--error);
+}
+
+.layers .segment.virtual .band {
+  stroke-dasharray: 1 8;
+}
+
+.layers .segment:hover .band,
+.layers .segment.selected .band,
+.layers .segment.lit .band {
+  stroke-width: 8;
+}
+
+.layers .segment-name {
+  text-anchor: start;
+  fill: var(--segment);
+  font-size: 10.5px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+}
+
+.layers .df circle {
+  fill: none;
+  stroke: var(--segment);
+  stroke-width: 2.5;
+}
+
+.layers .df text {
+  fill: var(--segment);
+  font-size: 10px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+}
+
+.layer-legend .ln.segment {
+  border-top: 4px solid var(--segment);
+  border-radius: 2px;
+}
+
+/* After the rules above, which set an opacity of their own on risers and spans. */
+.layers .dim {
+  opacity: 0.18;
+}
+
+.details:has(+ .details) {
+  padding-bottom: 4px;
+}
