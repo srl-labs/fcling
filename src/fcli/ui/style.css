@@ -3062,20 +3062,28 @@ button.row-action {
   background: none;
 }
 
+/* --planes, 0 to 100 from the planes slider: 0 clear, 50 each plane's own tint, 100 solid -
+   two straight pieces meeting at the tint. */
 .layers .plane polygon {
-  fill: color-mix(in srgb, var(--panel) 62%, transparent);
+  fill: color-mix(in srgb, var(--panel) var(--plane-mix), transparent);
+  --plane-mix: min(calc(var(--planes, 50) * 1.24%), calc(62% + (var(--planes, 50) - 50) * 0.76%));
   stroke: var(--edge);
   /* A plane is no thing to click: what is under it must still be reached through it. */
   pointer-events: none;
   stroke-width: 1;
 }
 
+.layers .plane-underlay polygon,
+.layers .plane-overlay polygon {
+  --plane-mix: max(calc(var(--planes, 50) * 0.84%), calc(42% + (var(--planes, 50) - 50) * 1.16%));
+}
+
 .layers .plane-underlay polygon {
-  fill: color-mix(in srgb, var(--ok-soft) 42%, transparent);
+  fill: color-mix(in srgb, var(--ok-soft) var(--plane-mix), transparent);
 }
 
 .layers .plane-overlay polygon {
-  fill: color-mix(in srgb, var(--config-soft) 42%, transparent);
+  fill: color-mix(in srgb, var(--config-soft) var(--plane-mix), transparent);
 }
 
 .layers .plane-title,

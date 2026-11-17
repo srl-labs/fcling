@@ -176,14 +176,18 @@ class _Edges:
                     "b_as": b_as,
                     "families": families,
                     "evpn": "evpn" in families,
-                    # Routes of the underlay itself: a session for EVPN alone carries none.
-                    "underlay": any(f != "evpn" for f in families) or not families,
+                    # Routes of the underlay itself: a session for VPN routes alone carries none.
+                    "underlay": any(f not in VPN_FAMILIES for f in families) or not families,
                     "bfd": "down" if "down" in bfd else "up" if "up" in bfd else "on" if bfd else "",
                 }
             else:
                 row["level"] = next((s["level"] for s in sides.values() if s.get("level")), "")
             out.append(row)
         return sorted(out, key=lambda e: (e["protocol"], e["a"] or "", e["b"] or "", e["a_port"], e["peer"]))
+
+
+#: The families of the overlay's routes, not the underlay's: a session for these alone runs between loopbacks.
+VPN_FAMILIES = frozenset({"evpn", "l3vpn-ipv4-unicast", "l3vpn-ipv6-unicast"})
 
 
 def _bfd(fabric: Fabric) -> dict[tuple[str, str, Any], str]:

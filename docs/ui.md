@@ -48,14 +48,14 @@ Everything else dims, so you can see what the selection touches. Drag to pan, sc
 | | |
 |---|---|
 | **Physical** | the nodes, each cable drawn on its own with a dot for the port at either end, and the clients |
-| **Underlay** | the routing sessions of the default network-instance, one line per session: BGP (solid), IS-IS and OSPF (dotted). Green is up, red is down: a session is up only when every end that reports it has it up. A violet halo marks a BGP session that also carries EVPN; one carrying EVPN alone, between loopbacks, is a dashed violet arc. A peer that is no node of the fabric is a stub with its address. |
+| **Underlay** | the routing sessions of the default network-instance, one line per session: BGP (solid), IS-IS and OSPF (dotted). Green is up, red is down: a session is up only when every end that reports it has it up. A violet halo marks a BGP session that also carries EVPN; one carrying VPN routes alone (EVPN, L3VPN), between loopbacks, is a dashed violet arc. BGP sessions are drawn curved, IS-IS and OSPF straight. A peer that is no node of the fabric is a stub with its address. |
 | **Overlay** | each ip-vrf (a circle) and mac-vrf (a square) on the footprint of every node that carries it, in the service's own colour, its instances joined across the nodes. A black line between a mac-vrf and an ip-vrf is the irb that routes one into the other. A dashed line from an ip-vrf to a diamond is a PE-CE BGP session and its CE. |
 
 An **ethernet-segment** is of no one plane. It is a host's ports on several nodes, so it is drawn among the cables: a teal band across the lines from a multihomed host to its nodes, red when it is not up on every one. Above 24 segments the multihomed hosts are drawn only with **Clients** on. A virtual segment, which tracks a next-hop in an ip-vrf and has no port, is a dotted band on the overlay, between its CE and the ip-vrfs that serve it.
 
 Dotted risers tie a node's place on one plane to its place on the next. A CE is the client on the port its session runs over: for a session over an irb, the one client of that mac-vrf on that node, and where there are several, the CE is drawn by its address alone.
 
-Drag to turn the drawing, Shift-drag to move it, scroll to zoom. **gap** sets how far apart the planes stand, the checkboxes hide a plane, **Reset** turns the drawing back and **Fit** frames it again. With more than 12 services the overlay shows one tenant, an ip-vrf with the mac-vrfs routed into it; **overlay** picks another tenant, one service alone (a single mac-vrf or ip-vrf across its nodes, without what it is linked to), or all of them. **Clients** shows every client, not only the CEs.
+Drag to turn the drawing, Shift-drag to move it, scroll to zoom. **gap** sets how far apart the planes stand, **planes** how much they hide of what is under them (clear to solid), the checkboxes hide a plane, **Reset** turns the drawing back and **Fit** frames it again. With more than 12 services the overlay shows one tenant, an ip-vrf with the mac-vrfs routed into it; **overlay** picks another tenant, one service alone (a single mac-vrf or ip-vrf across its nodes, without what it is linked to), or all of them. **Clients** shows every client, not only the CEs.
 
 A click selects across the planes, and everything else dims:
 

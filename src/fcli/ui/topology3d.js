@@ -10,8 +10,11 @@ export const LAYERS = [
   { id: "underlay", title: "Underlay", note: "routing sessions" },
   { id: "overlay", title: "Overlay", note: "mac-vrfs, ip-vrfs, irbs, PE-CE" },
 ];
-/** Where the drawing is seen from: turned about the vertical, tilted above the horizon, the planes this far apart. */
-const CAMERA = { yaw: -24, pitch: 32, gap: 200 };
+/**
+ * Where the drawing is seen from: turned about the vertical, tilted above the horizon, the planes this far
+ * apart and this opaque (0 clear, 100 solid; 50 is each plane's own tint).
+ */
+const CAMERA = { yaw: -24, pitch: 32, gap: 200, planes: 50 };
 const CAMERA_KEY = "fcli-camera";
 /** A node's footprint on a plane, and on the overlay, where its services stand on it. */
 const PAD = 34;
@@ -112,7 +115,7 @@ function touched(selected, graph, edges, overlay, segments) {
 
 /**
  * `toggle` is the control that leaves this view, shown first among its own: which planes are drawn,
- * which services the overlay shows, how far apart the planes stand.
+ * which services the overlay shows, how far apart the planes stand and how much they hide.
  */
 export function Layers({ graph, status, selected, onSelect, toggle = null }) {
   const box = useRef(null);
@@ -147,6 +150,8 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
     ? `service:${selected.id}`
     : scopes.includes(scopePick) ? scopePick : defaultScope(overlay.services);
   const shown = useMemo(() => inScope(overlay.services, scope), [overlay, scope]);
+  /** The nodes that carry a service, any service: the only ones the overlay plane has a place for. */
+  const serving = useMemo(() => new Set(overlay.services.flatMap((s) => s.nodes.map((n) => n.node))), [overlay]);
   const colour = useMemo(() => new Map(overlay.services.map((s, i) => [s.name, PALETTE[i % PALETTE.length]])), [overlay]);
 
   // The clients drawn: the CEs, what the selection is or touches, or every one when asked for.
@@ -314,6 +319,12 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
     return { p: P(layer, from.x, from.y), q: P(layer, to.x, to.y), len, ux, uy };
   };
   const d = ({ p, q }) => `M${p.x},${p.y} L${q.x},${q.y}`;
+  /** `line`, bowed `bow` to its left on the plane (to its right when negative). */
+  const curve = (layer, a, b, off, bow) => {
+    const { p, q, ux, uy } = line(layer, a, b, off);
+    const c = P(layer, (a.x + b.x) / 2 - uy * (off + bow), (a.y + b.y) / 2 + ux * (off + bow));
+    return `M${p.x},${p.y} Q${c.x},${c.y} ${q.x},${q.y}`;
+  };
   const ellipse = (layer, p, r, cls) => {
     const c = P(layer, p.x, p.y);
     return html`<ellipse class=${cls} cx=${c.x} cy=${c.y} rx=${r} ry=${Math.max(3, r * tilt)} />`;
@@ -455,13 +466,15 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
       const i = beside.get(pair) ?? 0;
       beside.set(pair, i + 1);
       const off = (i % 2 ? 1 : -1) * Math.ceil(i / 2) * 7;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
       if (e.protocol === "bgp" && !e.underlay) {
-        // Between loopbacks, over whatever the underlay routes it on: an arc, clear of the sessions on the cables.
-        const { p, q, len, ux, uy } = line("underlay", a, b, off);
-        const bow = 34 + len * 0.14;
-        const c = P("underlay", (a.x + b.x) / 2 - uy * bow, (a.y + b.y) / 2 + ux * bow);
-        const arc = `M${p.x},${p.y} Q${c.x},${c.y} ${q.x},${q.y}`;
+        // Between loopbacks, over whatever the underlay routes it on: a wide arc to one side.
+        const arc = curve("underlay", a, b, off, 34 + len * 0.14);
         out.push(group(html`<path class="hit" d=${arc} /><path class="wire" d=${arc} />`));
+      } else if (e.protocol === "bgp") {
+        // On a cable: a shallow bow to the other side, clear of the loopback arcs and of the IGP's straight lines.
+        const arc = curve("underlay", a, b, off, -(12 + len * 0.06));
+        out.push(group(html`<path class="hit" d=${arc} />${e.evpn && html`<path class="halo" d=${arc} />`}<path class="wire" d=${arc} />`));
       } else {
         const seg = line("underlay", a, b, off);
         out.push(group(html`<path class="hit" d=${d(seg)} />${e.evpn && html`<path class="halo" d=${d(seg)} />`}<path class="wire" d=${d(seg)} />`));
@@ -478,7 +491,8 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
       return p && slot ? { x: p.x + slot.dx, y: p.y + slot.dy } : null;
     };
     const names = new Set(shown.map((s) => s.name));
-    for (const n of graph.nodes) out.push(pad("overlay", n, FOOT, ""));
+    // A node with no service has nothing on this plane: no pad for it.
+    for (const n of graph.nodes) if (serving.has(n.name)) out.push(pad("overlay", n, FOOT, ""));
     // One service on several nodes is one service: its instances joined, in its colour.
     for (const s of shown) {
       const pts = s.nodes.map((n) => where(s.name, n.node)).filter(Boolean).sort((a, b) => a.x - b.x || a.y - b.y);
@@ -569,7 +583,7 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
     return html`<path class=${`riser${cls}`} d=${`M${from.x},${from.y} L${to.x},${to.y}`} />`;
   };
   const risers = (lower, upper) =>
-    graph.nodes.filter((n) => at(n.name)).map((n) => rise(lower, upper, at(n.name), `${dim(`n:${n.name}`)}${lit(`n:${n.name}`)}`));
+    graph.nodes.filter((n) => at(n.name) && (upper !== "overlay" || serving.has(n.name))).map((n) => rise(lower, upper, at(n.name), `${dim(`n:${n.name}`)}${lit(`n:${n.name}`)}`));
   const hostRisers = () =>
     [...placed.clients]
       .filter(([id]) => overlay.sessions.some((s) => s.client === id))
@@ -581,7 +595,7 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
     <div class="topology layers" ref=${box} onWheel=${onWheel} onPointerDown=${onPointerDown} onContextMenu=${(e) => e.preventDefault()}
          onPointerDownCapture=${() => (swallow.current = false)}
          onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${onPointerUp}>
-      <svg width="100%" height="100%">
+      <svg width="100%" height="100%" style=${`--planes:${camera.planes}`}>
         <g transform=${`translate(${view.x},${view.y}) scale(${view.k})`}>
           ${visible.map((l, i) => html`<g class=${`layer layer-${l.id}`}>
             ${plane(l)}
@@ -620,6 +634,10 @@ export function Layers({ graph, status, selected, onSelect, toggle = null }) {
         </label>
         <label title="How far apart the planes stand"><span>gap</span>
           <input type="range" min="80" max="420" step="10" value=${camera.gap} onInput=${(e) => setCamera({ ...camera, gap: Number(e.target.value) })} />
+        </label>
+        <label title="How much the planes hide what is under them: clear to solid"><span>planes</span>
+          <input type="range" min="0" max="100" step="5" value=${camera.planes} aria-label="Plane opacity"
+                 onInput=${(e) => setCamera({ ...camera, planes: Number(e.target.value) })} />
         </label>
       </div>
       <div class="legend layer-legend" onPointerDown=${quiet} onWheel=${quiet}>
@@ -716,7 +734,7 @@ export function LayerDetails({ selection, graph, status, checks, at, onSelect })
           ${e.b && html`<tr><td>${e.b}</td><td class="mono">${e.b_port || "loopback"}</td>${e.protocol === "bgp" && html`<td class="mono">${e.b_as ?? ""}</td>`}<td>${e.b_state || html`<span class="muted">nothing</span>`}</td></tr>`}
         </tbody>
       </table>
-      <p class="muted small">A session is up when every end that reports it has it up.${e.protocol === "bgp" && !e.underlay ? " It carries EVPN alone: the overlay's control plane, between loopbacks." : ""}</p>
+      <p class="muted small">A session is up when every end that reports it has it up.${e.protocol === "bgp" && !e.underlay ? " It carries VPN routes alone (EVPN, L3VPN): the overlay's control plane, between loopbacks." : ""}</p>
       ${e.protocol === "bgp" && html`<p><a href=${`#/report/bgp-peers?f.NI=${encodeURIComponent(`=${e.ni}`)}`}>All BGP peers</a></p>`}
     </div>`;
   }
