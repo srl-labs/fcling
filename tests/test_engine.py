@@ -250,3 +250,147 @@ def test_a_set_coming_back_in_another_order_is_no_change() -> None:
     assert diff("leaf1", "services", keyed([service("a")]), keyed([service("a", "b")]), 0.0)
     # A field not declared unordered keeps the order it was given.
     assert Service(node="leaf1", name="ipvrf1", import_rts=("2:2", "1:1")).import_rts == ("2:2", "1:1")
+
+
+def test_a_counter_ticking_changes_only_the_reports_that_read_counters() -> None:
+    """An ON_CHANGE subscription to an interface streams its statistics about once a
+    second: every report reading the interface re-ran on each tick, for nothing."""
+    from fcli.engine import Plan
+    from fcli.gnmi import path as gpath
+
+    plan = Plan([r for r in REGISTRY.values() if not r.hidden])
+
+    def touched(path: str) -> frozenset[str]:
+        return plan.touched(gpath.parse(path))
+
+    subif = "/interface[name=ethernet-1/1]/subinterface[index=0]"
+    assert {"subif", "services", "ni"} <= touched(f"{subif}/oper-state")
+    assert touched(f"{subif}/statistics/in-packets") == frozenset()
+    # Deeper than the first elements the plan looks at: still counters.
+    assert (
+        touched("/interface[name=lag1]/lag/member[name=ethernet-1/1]/lacp/statistics/lacp-in-pkts") == set()
+    )
+    assert "lag" in touched("/interface[name=lag1]/lag/member[name=ethernet-1/1]/oper-state")
+    # The report that reads counters still hears them.
+    assert touched("/interface[name=ethernet-1/1]/statistics/in-octets") == {"ifstats"}
+
+
+def test_the_engine_waits_longer_after_a_long_pass() -> None:
+    from fcli.engine import MAX_SETTLE
+
+    eng = Engine([Node("leaf1", "127.0.0.1:1")], [REGISTRY["bgp-peers"]], settle=0.5)
+    assert eng.wait() == 0.5
+    eng.busy = 3.0
+    assert eng.wait() == 3.0
+    eng.busy = 60.0
+    assert eng.wait() == MAX_SETTLE
+
+
+async def test_an_empty_container_already_held_is_no_news(target: FakeTarget) -> None:
+    """SR Linux sends ``/interface[name=lag1]`` as ``{}`` every second: every report
+    reading interfaces re-ran on it, for nothing. An empty one that creates is news."""
+    node = Node("leaf1", "127.0.0.1", target.port, USERNAME, PASSWORD, Tls(insecure=True))
+    eng = Engine([node], [REGISTRY["bgp-peers"]], settle=0.01, checks=False)
+    passes: list[set[str]] = []
+    evaluate = eng.evaluate
+
+    def counted() -> Any:
+        passes.append(set().union(*(s.dirty for s in eng.streams.values())))
+        return evaluate()
+
+    eng.evaluate = counted  # type: ignore[method-assign]
+    task = asyncio.create_task(eng.run())
+    try:
+        await _until(lambda: len(eng.current("bgp-peers")) == 2 and target.streaming)
+        await asyncio.sleep(0.3)
+        settled = len(passes)
+        target.push({PEER.format("10.0.0.1"): {}})
+        await asyncio.sleep(0.5)
+        assert len(passes) == settled
+        target.push({PEER.format("10.0.0.3"): {}})
+        await _until(lambda: len(passes) > settled)
+        assert passes[-1] == {"bgp-peers"}
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+def test_only_the_keys_a_read_names_decide_what_an_update_touches() -> None:
+    """Cached without the keys no read names: a MAC address in each made every update a miss."""
+    from fcli.engine import Plan
+    from fcli.gnmi import path as gpath
+
+    plan = Plan([r for r in REGISTRY.values() if not r.hidden])
+    irb = plan.touched(gpath.parse("/interface[name=irb0]/subinterface[index=1]/oper-state"))
+    eth = plan.touched(gpath.parse("/interface[name=ethernet-1/1]/subinterface[index=1]/oper-state"))
+    assert "irb" in irb and "irb" not in eth
+    macs = [
+        plan.touched(gpath.parse(f"/network-instance[name=v{i}]/bridge-table/mac-table/mac[address={i}]/x"))
+        for i in range(50)
+    ]
+    assert len(set(macs)) == 1 and "mac" in macs[0]
+    assert plan.affected.cache_info().currsize < 10
+
+
+def test_the_reads_under_one_list_share_a_subscription() -> None:
+    """SR Linux keeps the order of one subscription only: a network-instance's ``type``
+    streamed apart from the rest of it came back after its delete, as an empty one."""
+    from fcli.engine import Plan
+    from fcli.gnmi import path as gpath
+
+    plan = Plan([r for r in REGISTRY.values() if not r.hidden])
+    chunks = plan.chunks(20)
+    assert sorted(r.path for c in chunks for r in c if r.path in {x.path for x in plan.streamed}) == sorted(
+        r.path for r in plan.streamed
+    )
+    assert all(len(c) <= 20 for c in chunks)
+
+    def where(prefix: tuple[str, ...]) -> set[int]:
+        return {
+            i
+            for i, c in enumerate(chunks)
+            for r in c
+            if tuple(e.name for e in gpath.parse(r.path)[: len(prefix)]) == prefix
+        }
+
+    assert len(where(("network-instance",))) == 1
+    # A FIB table on its own: the node ends a subscription to it that changes too fast.
+    fib = [i for i, c in enumerate(chunks) if any("/fib-table/" in r.path for r in c)]
+    assert len(fib) == 1 and len(chunks[fib[0]]) == 2  # the table and the heartbeat
+
+
+async def test_a_subscription_the_node_ends_for_an_overflow_is_made_again_alone(target: FakeTarget) -> None:
+    """SR Linux ends a subscription to a FIB table that changed faster than it could
+    send. The node is not down: that subscription is made again, and what it says now
+    replaces what it said before - a peer gone meanwhile included - all at once."""
+    import grpc
+
+    node = Node("leaf1", "127.0.0.1", target.port, USERNAME, PASSWORD, Tls(insecure=True))
+    eng = Engine([node], [REGISTRY["bgp-peers"]], settle=0.01, checks=False)
+    events: list[dict[str, Any]] = []
+    eng.listen(events.append)
+    task = asyncio.create_task(eng.run())
+    try:
+        await _until(lambda: len(eng.current("bgp-peers")) == 2 and target.streaming)
+        subscribes = len(target.servicer.subscribes)
+        settled = len(events)
+        import copy
+
+        from fcli.gnmi import path as gp
+
+        # 10.0.0.1 gone while no one was told: the node now has only 10.0.0.2.
+        key = gp.schema(gp.parse(NEIGHBORS))
+        now = copy.deepcopy(target.servicer.data[key])
+        bgp = now["srl_nokia-network-instance:network-instance"][0]["protocols"]["srl_nokia-bgp:bgp"]
+        bgp["neighbor"] = bgp["neighbor"][1:]
+        target.servicer.data[key] = now
+        target.fail(grpc.StatusCode.RESOURCE_EXHAUSTED, "State response has overflowed its change buffer")
+        await _until(lambda: [p.peer for p in eng.current("bgp-peers")] == ["10.0.0.2"])
+        assert len(target.servicer.subscribes) == subscribes + 1
+        assert [e["status"] for e in events[settled:] if e["type"] == "node"] == []  # never down or syncing
+        assert eng.streams["leaf1"].status is Status.LIVE
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task

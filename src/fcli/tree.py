@@ -21,7 +21,7 @@ stripped from member names and from identity values, so a report reads
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeGuard
 
@@ -105,6 +105,21 @@ def _same(a: Any, b: Any) -> bool:
     return a == b or str(a) == str(b)
 
 
+def _hollow(node: dict[str, Any], keys: set[str]) -> bool:
+    """Whether *node* holds nothing but its *keys*: every other member an empty container,
+    or a list with no entries left. A leaf holds something, whatever its value."""
+    for name, value in node.items():
+        if name in keys:
+            continue
+        if isinstance(value, _Entries):
+            # Every dead id is of an entry still in the list, until it is compacted.
+            if len(value) > len(value.dead):
+                return False
+        elif not (isinstance(value, (dict, list)) and not value):
+            return False
+    return True
+
+
 def _is_list(value: Any) -> TypeGuard[list[dict[str, Any]]]:
     return isinstance(value, list) and all(isinstance(v, dict) for v in value)
 
@@ -117,7 +132,7 @@ class _Entries(list):  # type: ignore[type-arg]
     cost nothing. Still a list: reports and JSON never see the difference.
     """
 
-    __slots__ = ("by_key", "index_keys", "groups", "group_keys")
+    __slots__ = ("by_key", "index_keys", "groups", "group_keys", "dead")
 
     def __init__(self, entries: Any = ()) -> None:
         super().__init__(entries)
@@ -127,11 +142,18 @@ class _Entries(list):  # type: ignore[type-arg]
         #: of the list's keys: what a read naming some of them selects.
         self.groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
         self.group_keys: tuple[str, ...] | None = None
+        #: The ids of entries deleted but still in the list, until :meth:`compact`.
+        self.dead: set[int] = set()
+
+    def alive(self) -> list[dict[str, Any]]:
+        """The entries, those deleted and not yet compacted away left out."""
+        dead = self.dead
+        return [e for e in self if isinstance(e, dict) and (not dead or id(e) not in dead)]
 
     def find(self, keys: tuple[tuple[str, str], ...]) -> dict[str, Any] | None:
         names = tuple(k for k, _ in keys)
         if self.index_keys != names:
-            self.by_key = {tuple(str(e.get(k)) for k in names): e for e in self if isinstance(e, dict)}
+            self.by_key = {tuple(str(e.get(k)) for k in names): e for e in self.alive()}
             self.index_keys = names
         return self.by_key.get(tuple(str(v) for _, v in keys))
 
@@ -140,9 +162,8 @@ class _Entries(list):  # type: ignore[type-arg]
         names = tuple(k for k, _ in keys)
         if self.group_keys != names:
             self.groups = {}
-            for e in self:
-                if isinstance(e, dict):
-                    self.groups.setdefault(tuple(str(e.get(k)) for k in names), []).append(e)
+            for e in self.alive():
+                self.groups.setdefault(tuple(str(e.get(k)) for k in names), []).append(e)
             self.group_keys = names
         return self.groups.get(tuple(str(v) for _, v in keys), [])
 
@@ -152,6 +173,27 @@ class _Entries(list):  # type: ignore[type-arg]
             self.by_key[tuple(str(entry.get(k)) for k in self.index_keys)] = entry
         if self.group_keys is not None:
             self.groups.setdefault(tuple(str(entry.get(k)) for k in self.group_keys), []).append(entry)
+
+    def kill(self, gone: list[dict[str, Any]]) -> None:
+        """Delete these very entries: gone from the index at once, from the list at the
+        next :meth:`compact`. A node scaled down deletes thousands of entries of one list
+        a few paths a notification; taking each out of the list then was a pass over it
+        every time - minutes of a server's loop."""
+        for entry in gone:
+            self.dead.add(id(entry))
+            if self.index_keys is not None:
+                key = tuple(str(entry.get(k)) for k in self.index_keys)
+                if self.by_key.get(key) is entry:
+                    del self.by_key[key]
+        # Made again, without them, by the next read that needs them.
+        self.group_keys = None
+
+    def compact(self) -> None:
+        """Take the deleted entries out of the list: one pass, however many there are."""
+        if self.dead:
+            dead = self.dead
+            self[:] = [e for e in self if id(e) not in dead]
+            self.dead = set()
 
     def invalidate(self) -> None:
         self.index_keys = None
@@ -174,6 +216,15 @@ class Tree:
     def __init__(self) -> None:
         self.root: dict[str, Any] = {}
         self._keys: dict[str, tuple[str, ...]] = {}
+        #: Lists with deleted entries still in them, for :meth:`compact`.
+        self._dead: dict[int, _Entries] = {}
+
+    def compact(self) -> None:
+        """Take every deleted entry out of its list. By the writer only, before what reads
+        the lists themselves rather than through :meth:`select`: a report's pass, a follow."""
+        for entries in self._dead.values():
+            entries.compact()
+        self._dead.clear()
 
     # ------------------------------------------------------------------ keys
 
@@ -194,6 +245,14 @@ class Tree:
                 return (key,)
         return None
 
+    def keys(self) -> dict[str, tuple[str, ...]]:
+        """The key names of every list a path has named, by schema."""
+        return dict(self._keys)
+
+    def learn(self, schema: str, names: tuple[str, ...]) -> None:
+        """Know the list at *schema* by *names*, unless it is known already."""
+        self._keys.setdefault(schema, names)
+
     def _learn(self, schema: str, keys: tuple[tuple[str, str], ...]) -> None:
         if keys and schema not in self._keys:
             self._keys[schema] = tuple(k for k, _ in keys)
@@ -202,10 +261,84 @@ class Tree:
 
     def apply(self, notification: Notification) -> None:
         """A gNMI notification: its deletes, then its updates, as the spec orders them."""
-        for path in notification.deletes:
-            self.delete(path)
+        self._delete_all(notification.deletes)
         for path, value in notification.updates:
             self.update(path, value)
+
+    def _delete_all(self, paths: Iterable[str | Path]) -> None:
+        """Delete *paths*: the entries of one list they name by key, in one pass; then
+        what they leave with nothing in it but its keys."""
+        doomed: dict[int, tuple[_Entries, list[dict[str, Any]]]] = {}
+        above: set[Path] = set()
+        for raw in paths:
+            path = gpath.parse(raw)
+            if len(path) > 1:
+                above.add(path[:-1])
+            found = self._keyed(path)
+            if found is None:
+                # In the order given: what comes next may be under what this deletes.
+                self._drop(doomed)
+                self.delete(path)
+            elif found[1] is not None:
+                doomed.setdefault(id(found[0]), (found[0], []))[1].append(found[1])
+        self._drop(doomed)
+        if above:
+            self._hollow_out(above)
+
+    def _hollow_out(self, paths: set[Path]) -> None:
+        """Remove what *paths* name if nothing but its keys is left in it, then their parents
+        the same way. SR Linux deletes what was subscribed under a network-instance - its
+        ``type``, its ``oper-state``, its interfaces - and never the network-instance
+        itself: kept, the entry was an empty network-instance until the node was read anew."""
+        level = max(len(p) for p in paths)
+        while level > 0:
+            parents: set[Path] = set()
+            for path in [p for p in paths if len(p) == level]:
+                if self._hollow_one(path) and level > 1:
+                    parents.add(path[:-1])
+            paths = {p for p in paths if len(p) < level} | parents
+            level -= 1
+
+    def _hollow_one(self, path: Path) -> bool:
+        """Remove what *path* names if it holds nothing but its keys; whether it did."""
+        node = self._descend(path, create=False)
+        last = path[-1]
+        if not isinstance(node, dict) or not _hollow(node, {k for k, _ in last.keys}):
+            return False
+        found = self._keyed(path) if last.keys else None
+        if found is not None and found[1] is node:
+            self._drop({id(found[0]): (found[0], [node])})
+        else:
+            parent = self._descend(path[:-1], create=False)
+            if parent is None:
+                return False
+            if last.keys:
+                self.delete(path)
+            else:
+                parent.pop(last.name, None)
+        return True
+
+    def _drop(self, doomed: dict[int, tuple[_Entries, list[dict[str, Any]]]]) -> None:
+        for entries, gone in doomed.values():
+            entries.kill(gone)
+            self._dead[id(entries)] = entries
+        doomed.clear()
+
+    def _keyed(self, path: Path) -> tuple[_Entries, dict[str, Any] | None] | None:
+        """The list *path* names an entry of by every one of its keys, and that entry -
+        ``None`` if there is none; ``None`` for any other path."""
+        last = path[-1] if path else None
+        if last is None or not last.keys or any(v == gpath.WILDCARD for _, v in last.keys):
+            return None
+        # A gNMI path names an entry by all of its list's keys; fewer would be a wildcard.
+        keys = self._list_keys(gpath.schema(path))
+        if keys is not None and keys != tuple(k for k, _ in last.keys):
+            return None
+        parent = self._descend(path[:-1], create=False)
+        entries = parent.get(last.name) if parent is not None else None
+        if not isinstance(entries, _Entries):
+            return None
+        return entries, entries.find(last.keys)
 
     def update(self, path: str | Path, value: Any) -> None:
         """Merge *value* in at *path*, as a gNMI update does."""
@@ -242,9 +375,13 @@ class Tree:
             parent.pop(last.name, None)
             return
         entries = parent.get(last.name)
+        if isinstance(entries, _Entries):
+            entries.compact()
         if isinstance(entries, list):
             want = last.key_dict
-            parent[last.name] = [e for e in entries if not all(_same(e.get(k), v) for k, v in want.items())]
+            parent[last.name] = _Entries(
+                e for e in entries if not all(_same(e.get(k), v) for k, v in want.items())
+            )
 
     def prune(self, path: str | Path) -> None:
         """Remove everything *path* names, wildcards included: what a delete
@@ -255,6 +392,7 @@ class Tree:
         subscription, never says what is gone.
         """
         path = gpath.parse(path)
+        self.compact()
         if not path:
             self.root.clear()
             return
@@ -338,6 +476,8 @@ class Tree:
             self._merge_member(into, name, child, f"{schema}/{name}" if schema else name)
 
     def _merge_list(self, into: list[dict[str, Any]], value: list[dict[str, Any]], schema: str) -> None:
+        if isinstance(into, _Entries):
+            into.compact()
         keys = self._list_keys(schema, into, value)
         if isinstance(into, _Entries):
             into.invalidate()
@@ -387,6 +527,8 @@ class Tree:
             if not isinstance(child, _Entries):
                 child = node[elem.name] = _Entries(child)
             entries = child.matching(elem.keys)
+        elif isinstance(child, _Entries):
+            entries = child.alive()
         else:
             entries = [e for e in child if isinstance(e, dict)]
         key_names = list(want) or list(self._list_keys(schema, entries) or ())

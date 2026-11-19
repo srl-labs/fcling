@@ -55,6 +55,16 @@ On a reconnect the engine fills a fresh copy of the node's state and switches to
 
 An update re-runs only the reports whose paths it touches. For example, a subinterface's oper-state touches `subif` and `ni`, and nothing else.
 
+Some updates re-run nothing:
+- **Counters.** An update under a `statistics` container re-runs only a report whose own read names `statistics` (`ifstats`). An ON_CHANGE subscription to an interface streams its counters about once a second.
+- **Empty updates.** An empty update (`{}`) for something the engine already holds re-runs nothing. SR Linux sends one for a LAG every second.
+
+Before each pass, the engine waits at least as long as its last pass took, and at most 10 s. A large fabric being reconfigured is then evaluated in fewer, larger passes, which leaves the server time to answer between them.
+
+The reads under one list share a subscription where they fit, because SR Linux keeps the order of what one subscription sends but not between two. The BGP RIB and the FIB table each get a subscription of their own. When a fabric is scaled up or down at once, SR Linux can end the FIB subscription with `RESOURCE_EXHAUSTED … overflowed its change buffer`. The engine then subscribes to that table again, on its own, and the node stays live. The new copy replaces the old one only once it is complete, so no report reads half a table.
+
+After deletes, an entry left with nothing but its keys is removed too. SR Linux deletes the paths subscribed under a network-instance, not the network-instance itself.
+
 Each node uses about 2 gNMI sessions (SR Linux allows 20 per target, shared by all clients). Each client also runs at most 4 Gets at once.
 
 ## HTTP API
@@ -99,6 +109,8 @@ Errors are JSON, `{"error": "..."}`, with status 400 or 404. An `at` before the 
 - **`change`:** a record was added, removed or changed. `op` is `add`, `remove`, `change`, or `update` (volatile fields only; see [history.md](history.md)). Every change except `update` has a sequence number as its event id.
 
 Filter with `report=` and `node=`. A client that reconnects with `Last-Event-ID` (or `after=SEQ`) first receives the changes it missed, replayed from the history. A client that falls more than 10,000 events behind is disconnected, and catches up the same way when it reconnects.
+
+With `brief=1` a change is only a trigger, for a view that looks again when something changes, as the web UI does. Such an event carries the change's sequence number, time, node, report, key and op, but not `before` or `after`. A report, node and kind (`update` or not) is told once until the client has read it, and nothing missed is replayed on reconnect. A fabric reconfigured at scale changes tens of thousands of records in one evaluation. A full stream would be cut there and would catch up all over again.
 
 ```bash
 curl -N 'http://127.0.0.1:8765/api/events?report=bgp-peers'

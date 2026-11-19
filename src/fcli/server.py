@@ -184,6 +184,16 @@ def _public(path: str) -> bool:
     return path in ("/", "/api", "/api/openapi.json") or path.startswith("/ui/")
 
 
+#: What a brief event stream tells of a change: which, not what it was.
+BRIEF_FIELDS = ("type", "seq", "ts", "node", "report", "key", "op")
+
+
+def _kind(change: dict[str, Any]) -> tuple[str, str, bool]:
+    """The kind of *change* a brief stream sends once until it is read: what a view
+    following the stream tells apart - a report, a node, an update or a real change."""
+    return (str(change["report"]), str(change["node"]), change.get("op") == "update")
+
+
 def _sse(event: dict[str, Any]) -> str:
     lines = []
     kind = event.get("type", "message")
@@ -441,7 +451,10 @@ def create_app(
     async def events(request: Request) -> Response:
         reports_wanted = set(query_list(request, "report"))
         nodes_wanted = set(query_list(request, "node"))
+        brief = request.query_params.get("brief") in ("1", "true")
         queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(QUEUE_SIZE)
+        #: Brief: the kinds of change told and not yet sent - one says as much as a thousand.
+        waiting: set[tuple[str, str, bool]] = set()
 
         def wanted(event: dict[str, Any]) -> bool:
             if event["type"] == "acks":
@@ -457,6 +470,12 @@ def create_app(
         def listener(event: dict[str, Any]) -> None:
             if not wanted(event):
                 return
+            if brief and event["type"] == "change":
+                kind = _kind(event)
+                if kind in waiting:
+                    return
+                waiting.add(kind)
+                event = {k: event[k] for k in BRIEF_FIELDS if k in event}
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
@@ -475,7 +494,8 @@ def create_app(
         async def stream() -> AsyncIterator[str]:
             try:
                 yield _sse({"type": "status", "nodes": engine.status()})
-                if last and engine.store is not None:
+                # Brief, what was missed is not replayed: one coming back looks again anyway.
+                if last and not brief and engine.store is not None:
                     missed = await engine.store.history(
                         after_seq=int(last),
                         reports=sorted(reports_wanted),
@@ -492,6 +512,8 @@ def create_app(
                         continue
                     if event is None:
                         return
+                    if brief and event["type"] == "change":
+                        waiting.discard(_kind(event))
                     yield _sse(event)
             finally:
                 stop()
@@ -508,6 +530,8 @@ def create_app(
                 "help": lens.help,
                 "args": [{"name": a.name, "help": a.help, "required": a.required} for a in lens.args],
                 "columns": [c.title for c in lens.columns],
+                # What it is made from: a page following the fabric looks again when one changes.
+                "reads": list(lens.requires),
                 "schema": lens.record.model_json_schema(),
             }
             for lens in LENSES.values()

@@ -39,7 +39,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from . import config
-from .checks import FLAP_WINDOW, Finding, required, run_checks
+from .checks import FLAP_WINDOW, HISTORY_REPORTS, Finding, recent, recent_changes, required, run_checks
 from .collect import MAX_FOLLOW, UNKNOWN_ELEMENT, by_type, get_notifications
 from .delta import Change, Op, diff, keyed
 from .fabric import Fabric
@@ -58,6 +58,14 @@ logger = logging.getLogger(__name__)
 MAX_SUBSCRIBED_PATHS = 36
 _MAX_PATHS_ERROR = re.compile(r"maximum of (\d+) subscribed paths")
 
+#: How SR Linux ends a subscription to a list that changed faster than it could send:
+#: "State response has overflowed its change buffer" (a FIB table on a fabric scaled down).
+_OVERFLOW = re.compile(r"overflowed its change buffer")
+
+#: Reads of tables so big and so changeable that each gets a subscription of its own:
+#: slow to sync, and the node ends a subscription to one when it changes too fast for it.
+OWN_SUBSCRIPTION = ("/bgp-rib/afi-safi", "/fib-table/")
+
 #: How a node rejects a subscription to a path its schema lacks - a feature
 #: this platform or this node's role does not have: the whole request fails,
 #: naming the element.
@@ -74,6 +82,12 @@ STALE_AFTER = 55.0
 #: Seconds a subscription has to deliver its initial sync.
 SYNC_TIMEOUT = 300.0
 
+#: What is new to follow is looked for at most once a second, and never sooner than
+#: this many times as long as the last look took, times the number of nodes: it walks
+#: whole tables on the loop, a fabric being reconfigured makes it due every second on
+#: every node, and the loop is one for all of them.
+FOLLOW_BUSY = 5.0
+
 #: What the engine keeps the fabric checks' findings as, like a report.
 CHECKS_REPORT = "checks"
 
@@ -82,6 +96,13 @@ CHECKS_EVERY = 30.0
 
 #: Seconds the checks wait at most for every node to be read once.
 STARTUP_GRACE = 60.0
+
+#: After a pass, the engine lets updates land for at least this many times as long as
+#: the pass took: a big fabric being reconfigured is evaluated in fewer, larger passes,
+#: and the server has time between them to answer.
+BUSY_FACTOR = 1.0
+#: Seconds the engine waits at most, however long its passes take.
+MAX_SETTLE = 10.0
 
 #: What logs the commits whose configurations are kept.
 COMMITS_REPORT = "config-commits"
@@ -139,31 +160,99 @@ class Plan:
         )
         self.following = [rep for rep in self.reports.values() if rep.follow]
         self.affected = lru_cache(maxsize=4096)(self._affected)
+        #: ``(depth, element)`` where a read names keys other than ``*``: the only keys
+        #: of an update's path that can change what it touches.
+        self._keyed = frozenset(
+            (i, e.name)
+            for _, patterns in self._patterns
+            for p in patterns
+            for i, e in enumerate(p)
+            if any(v != gpath.WILDCARD for _, v in e.keys)
+        )
 
     def chunks(self, max_paths: int, excluded: frozenset[Read] = frozenset()) -> list[list[Read]]:
         """The streamed reads in Subscribe requests of at most *max_paths*, a heartbeat in each.
 
-        A full BGP RIB path is large and slow to sync; it gets its own RPC so
-        opening another report does not replace the subscription carrying it.
+        A full BGP RIB path is large and slow to sync, and a FIB table changes faster
+        than the node can stream on a fabric scaled up or down: each gets its own RPC, so
+        opening another report does not replace the subscription carrying it, and the
+        node ending one ends nothing else.
+
+        The reads under one top-level list share a request where they fit: SR Linux
+        keeps the order of what one subscription sends, never between two. Split, a
+        network-instance's ``type`` streamed apart from the rest of it, and an update
+        that came on one after the other had deleted the network-instance made it
+        again - an empty one, there until the node was read anew.
         """
         streamed = [r for r in self.streamed if r not in excluded]
-        heavy = [r for r in streamed if "/bgp-rib/afi-safi" in r.path]
+        heavy = [r for r in streamed if any(t in r.path for t in OWN_SUBSCRIPTION)]
         light = [r for r in streamed if r not in heavy]
         size = max(1, max_paths - 1)
-        chunks: list[list[Read]] = [[*light[i : i + size], HEARTBEAT] for i in range(0, len(light), size)]
+        packed: list[list[Read]] = []
+        # The largest first, each into the first request with room for all of it.
+        for group in sorted(_lists(light, size), key=len, reverse=True):
+            for i in range(0, len(group), size):
+                part = group[i : i + size]
+                room = next((c for c in packed if len(c) + len(part) <= size), None)
+                if room is None:
+                    packed.append(list(part))
+                else:
+                    room.extend(part)
+        chunks = [[*c, HEARTBEAT] for c in packed]
         for read in heavy:
             chunks.append([read, HEARTBEAT])
         return chunks or [[HEARTBEAT]]
 
-    def _affected(self, prefix: Path) -> frozenset[str]:
+    def _affected(self, prefix: Path, counters: bool) -> frozenset[str]:
         return frozenset(
-            name for name, patterns in self._patterns if any(gpath.overlaps(prefix, p) for p in patterns)
+            name
+            for name, patterns in self._patterns
+            if any(gpath.overlaps(prefix, p) and (not counters or _counts(p)) for p in patterns)
         )
 
     def touched(self, path: Path) -> frozenset[str]:
+        """The reports an update at *path* can change.
+
+        Counters are left to the reads that name them: an ON_CHANGE subscription to an
+        interface streams its statistics about once a second, and every report reading
+        the interface re-ran on each tick - on a big fabric, a core's worth for nothing.
+        """
         # Cached on the first elements: deeper than the reads go, an update
-        # changes nothing about which of them it overlaps.
-        return self.affected(path[:4])
+        # changes nothing about which of them it overlaps. Their keys only where a read
+        # names one: a MAC address or an index in the key made nearly every update a miss.
+        head = tuple(
+            e if not e.keys or (i, e.name) in self._keyed else _bare(e.name) for i, e in enumerate(path[:4])
+        )
+        return self.affected(head, _counts(path))
+
+
+@lru_cache(maxsize=1024)
+def _bare(name: str) -> gpath.Elem:
+    """An element of *name* without keys: one that selects every entry."""
+    return gpath.Elem(name)
+
+
+#: Containers of counters: an update in one changes only a report whose read names it.
+COUNTERS = frozenset({"statistics"})
+
+
+def _counts(path: Path) -> bool:
+    """Whether *path* is in a container of counters."""
+    return any(e.name in COUNTERS for e in path)
+
+
+def _lists(reads: Sequence[Read], size: int, depth: int = 1) -> list[list[Read]]:
+    """*reads* by the list they are under - the first *depth* elements of their path -
+    and, for a list with more than *size* reads under it, by the lists one deeper."""
+    groups: dict[tuple[str, ...], list[Read]] = {}
+    for read in reads:
+        path = gpath.parse(read.path)
+        groups.setdefault(tuple(e.name for e in path[:depth]), []).append(read)
+    out: list[list[Read]] = []
+    for key, group in groups.items():
+        deeper = len(group) > size and any(len(gpath.parse(r.path)) > depth for r in group)
+        out.extend(_lists(group, size, depth + 1) if deeper and len(key) == depth else [group])
+    return out
 
 
 def _covers(outer: Read, inner: Read) -> bool:
@@ -179,6 +268,10 @@ def _attr_set_cached(tree: Tree, read: Read) -> bool:
     the route to a new index, so a found set does not need periodic re-Get.
     """
     return "attr-set[index=" in read.path and isinstance(tree.get(read.path), dict)
+
+
+def _paths(reads: Sequence[Read]) -> str:
+    return ", ".join(r.path for r in reads if r is not HEARTBEAT)
 
 
 def _first_error(exc: BaseException) -> BaseException:
@@ -231,6 +324,10 @@ class NodeStream:
         self._followed: set[Read] = set()
         #: A report that follows reads was touched: what it wants may be new.
         self._follow_pending = False
+        #: When what is new to follow may next be looked for (monotonic).
+        self._follow_due = 0.0
+        #: How many nodes share the loop: what this one's follows may take of it is a share.
+        self.peers = 1
         self._stream_heard: list[float] = []
         #: The session's connection while there is one: what one-off Gets go over.
         self.client: GnmiClient | None = None
@@ -353,7 +450,7 @@ class NodeStream:
         self._stream_heard = [time.monotonic()] * len(chunks)
         async with asyncio.TaskGroup() as tasks:
             for i, chunk in enumerate(chunks):
-                tasks.create_task(self._stream(client, chunk, i, synced[i]))
+                tasks.create_task(self._subscription(client, chunk, i, synced[i]))
             async with asyncio.timeout(SYNC_TIMEOUT):
                 await asyncio.gather(*(e.wait() for e in synced))
             await self._poll(client, fresh)
@@ -366,25 +463,69 @@ class NodeStream:
             tasks.create_task(self._loop(1.0, lambda: self._follow_new(client)))
             tasks.create_task(self._watchdog())
 
-    async def _stream(
+    async def _subscription(
         self, client: GnmiClient, reads: Sequence[Read], index: int, synced: asyncio.Event
     ) -> None:
+        """One subscription, for as long as the session lasts. Ended by the node for a
+        change buffer overflowed, it is made again on its own: the node stays live, and
+        the fresh copy of its paths replaces the old one once it has all of it."""
+        staged: Tree | None = None
+        while True:
+            try:
+                await self._stream(client, reads, index, synced, staged)
+            except RpcFailed as exc:
+                if not synced.is_set() or not _OVERFLOW.search(str(exc)):
+                    raise
+                logger.warning("%s: subscribing again to %s: %s", self.node.name, _paths(reads), exc)
+                staged = Tree()
+
+    async def _stream(
+        self,
+        client: GnmiClient,
+        reads: Sequence[Read],
+        index: int,
+        synced: asyncio.Event,
+        staged: Tree | None = None,
+    ) -> None:
+        """Apply what the subscription to *reads* sends; into *staged* until it has synced,
+        when given, and only then in place of what the node's state had of *reads*."""
         subscriptions = [Subscription(r.path, r.mode, r.sample_interval) for r in reads]
         async for notification in client.subscribe(subscriptions):
             self.heard = time.time()
             self._stream_heard[index] = time.monotonic()
             if notification.sync:
+                if staged is not None:
+                    self._take(reads, staged)
+                    staged = None
                 synced.set()
                 continue
+            if staged is not None:
+                staged.apply(notification)
+                continue
+            # An empty container the tree already holds is no news: SR Linux sends one
+            # for a LAG every second, and every report reading interfaces re-ran on it.
+            news = [p for p, v in notification.updates if v != {} or self._target.get(p) is None]
             self._target.apply(notification)
             touched: set[str] = set()
             for path in notification.deletes:
                 touched |= self.plan.touched(path)
-            for path, _ in notification.updates:
+            for path in news:
                 touched |= self.plan.touched(path)
             if touched:
                 self._touch(touched)
         raise GnmiError(f"{self.node.name}: the node ended the subscription")
+
+    def _take(self, reads: Sequence[Read], staged: Tree) -> None:
+        """What a subscription synced again into *staged*, in place of what the state had
+        of its *reads*: all at once, so no report reads half a table."""
+        tree = self._target
+        staged.compact()
+        for read in reads:
+            tree.prune(read.path)
+        for schema, keys in staged.keys().items():
+            tree.learn(schema, keys)
+        tree.update("/", staged.root)
+        self._touch(name for read in reads for name in self.plan.touched(gpath.parse(read.path)))
 
     @staticmethod
     async def _loop(interval: float, step: Callable[[], Awaitable[None]]) -> None:
@@ -423,6 +564,7 @@ class NodeStream:
         self._touch(self.plan.after_poll)
 
     def _wanted(self, tree: Tree) -> set[Read]:
+        tree.compact()
         return {r for rep in self.plan.following for r in rep.follow(tree, _defaults(rep))}  # type: ignore[misc]
 
     async def _follow(self, client: GnmiClient, tree: Tree, refresh: bool) -> None:
@@ -445,9 +587,13 @@ class NodeStream:
         self._follow_pending = pending
 
     async def _follow_new(self, client: GnmiClient) -> None:
-        if self._follow_pending:
+        if self._follow_pending and time.monotonic() >= self._follow_due:
             self._follow_pending = False
+            started = time.monotonic()
             await self._follow(client, self.tree, refresh=False)
+            # Gets waited on count too: a node slow to answer is no reason to look more often.
+            spent = time.monotonic() - started
+            self._follow_due = time.monotonic() + FOLLOW_BUSY * self.peers * spent
 
 
 Listener = Callable[[dict[str, Any]], None]
@@ -471,12 +617,15 @@ class Engine:
         self.plan = Plan(reports)
         self.store = store
         self.settle = settle
+        #: Seconds the last evaluation took, its checks and its write included.
+        self.busy = 0.0
         self._wake = asyncio.Event()
         #: Whether the fabric checks run, and so findings are kept as ``checks``.
         self.checks = checks
         self._check_reports = set(required())
         self._checks_due = checks
-        #: Kept changes of the last :data:`FLAP_WINDOW`: what flapping reads.
+        #: Kept changes of the last :data:`FLAP_WINDOW`, in their :func:`~fcli.checks.recent`
+        #: form: what flapping and the cables gone read.
         self.recent: deque[dict[str, Any]] = deque()
         #: ``{(node, key): when}`` each current finding was raised.
         self.raised: dict[tuple[str, str], float] = {}
@@ -491,6 +640,8 @@ class Engine:
             )
             for n in self.nodes
         }
+        for stream in self.streams.values():
+            stream.peers = len(self.streams)
         #: ``{(node, report): {key: record}}``: the last run of every report.
         self.records: dict[tuple[str, str], dict[str, Record]] = {}
         self._listeners: set[Listener] = set()
@@ -561,14 +712,24 @@ class Engine:
                     records[key] = model.model_validate(row)
             self.records[(node, name)] = records
         self.raised = await self.store.raised(CHECKS_REPORT)
-        self.recent.extend(await self.store.history(since=time.time() - FLAP_WINDOW, limit=100_000))
+        self.recent.extend(
+            recent_changes(
+                await self.store.history(
+                    since=time.time() - FLAP_WINDOW, reports=list(HISTORY_REPORTS), limit=100_000
+                )
+            )
+        )
 
     async def _evaluate_loop(self) -> None:
         while True:
             await self._wake.wait()
-            # Let a burst of updates land before running anything.
-            await asyncio.sleep(self.settle)
+            # Let a burst of updates land before running anything; longer, the longer the passes.
+            await asyncio.sleep(self.wait())
             self._wake.clear()
+            started = time.monotonic()
+            # Deleted entries out of their lists here, by the writer: reports read the lists.
+            for stream in self.streams.values():
+                stream.tree.compact()
             changes, records = await asyncio.to_thread(self.evaluate)
             if self.checks and not self._ready():
                 # Half a fabric read is every link one-sided: wait for the rest.
@@ -577,13 +738,15 @@ class Engine:
                 self._checks_due or any(c.report in self._check_reports for c in changes if c.kept)
             ):
                 self._checks_due = False
-                found, findings = self.evaluate_checks(changes, records)
+                # Off the loop too: over a big fabric the checks take a while.
+                found, findings = await asyncio.to_thread(self.evaluate_checks, changes, records)
                 changes += found
                 records.update(findings)
             kept = [c for c in changes if c.kept]
             if kept and self.store is not None:
                 seqs = iter(await self.store.write(kept))
                 changes = [replace(c, seq=next(seqs)) if c.kept else c for c in changes]
+            self.busy = time.monotonic() - started
             # Only now: what is read live is never ahead of what is in the
             # history and on its way to the listeners.
             self.records.update(records)
@@ -592,6 +755,10 @@ class Engine:
                 self._read_config(node)
             for change in changes:
                 self._publish({"type": "change", **change.as_dict()})
+
+    def wait(self) -> float:
+        """Seconds to let updates land before the next pass."""
+        return min(max(self.settle, BUSY_FACTOR * self.busy), max(self.settle, MAX_SETTLE))
 
     def _read_config(self, node: str) -> None:
         """Read and keep *node*'s configuration soon; again after a read already under way."""
@@ -655,7 +822,8 @@ class Engine:
         for c in changes:
             if not c.kept:
                 continue
-            self.recent.append(c.as_dict())
+            if (slim := recent(c.as_dict())) is not None:
+                self.recent.append(slim)
             if c.report == CHECKS_REPORT:
                 if c.op is Op.ADD:
                     self.raised[(c.node, c.key)] = c.ts
@@ -681,7 +849,7 @@ class Engine:
     ) -> tuple[list[Change], dict[tuple[str, str], dict[str, Record]]]:
         """The fabric checks over the engine's records and *pending* runs: findings changed, and kept."""
         fabric = self.fabric(pending)
-        fabric.changes = [*fabric.changes, *(c.as_dict() for c in changes if c.kept)]
+        fabric.changes = [*fabric.changes, *recent_changes(c.as_dict() for c in changes if c.kept)]
         try:
             findings = run_checks(fabric)
         except Exception:

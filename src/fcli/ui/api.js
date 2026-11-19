@@ -129,15 +129,13 @@ export function follow(reports, onEvent, onConnection = () => {}) {
 // event stream holds one for as long as it is open. A stream per view, in every
 // tab, used them up: past that, every request - a diff, a report - waited for
 // ever. So a tab has one stream, shared by every view that follows, and a tab in
-// the background lets it go, catching up from the history when it comes back.
+// the background lets it go, and its views look again when it comes back.
 
 const EVENT_TYPES = ["status", "node", "change", "acks"];
 /** How long a tab is hidden before it lets its stream go: a glance elsewhere keeps it. */
 const HIDDEN_GRACE_MS = 30_000;
 const listeners = new Set();
 let stream = null;
-/** The last change seen, so a stream opened again replays what it missed. */
-let lastSeq = null;
 let hiddenTimer = null;
 /** Whether this tab had its stream open before: opened again, its views load again. */
 let wasOpen = false;
@@ -151,7 +149,10 @@ function deliver(type, event) {
 
 function openStream() {
   if (stream || !listeners.size || document.hidden) return;
-  stream = new EventSource(url("/api/events", { token, ...(lastSeq ? { after: lastSeq } : {}) }));
+  // Brief: a view looks again on a change, so one of each kind is enough, and nothing missed is
+  // replayed - a view looks again on "resync". Every change of a fabric reconfigured at scale was
+  // tens of thousands of events at once: more than the stream holds, cut and opened again for ever.
+  stream = new EventSource(url("/api/events", { token, brief: 1 }));
   stream.onopen = () => {
     listeners.forEach((l) => l.onConnection("live"));
     // Back from the background, or from a server restart: what was asked meanwhile may have
@@ -165,7 +166,6 @@ function openStream() {
   };
   for (const type of EVENT_TYPES) {
     stream.addEventListener(type, (e) => {
-      if (type === "change" && e.lastEventId) lastSeq = e.lastEventId;
       deliver(type, JSON.parse(e.data));
     });
   }

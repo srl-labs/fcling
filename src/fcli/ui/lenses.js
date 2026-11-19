@@ -1,7 +1,7 @@
 // The lenses: where an address is, how traffic would get there, the services end to end, every host.
 
-import { html, useEffect, useMemo, useState } from "./vendor/preact-htm.module.js";
-import { clock, get, natural, withQuery } from "./api.js";
+import { html, useEffect, useMemo, useRef, useState } from "./vendor/preact-htm.module.js";
+import { clock, follow, get, natural, withQuery } from "./api.js";
 import { DataTable } from "./table.js";
 import { Topology } from "./topology.js";
 
@@ -49,11 +49,64 @@ function RefreshControl({ every, onChange, at, updated }) {
   </label>`;
 }
 
-/** A lens's answer, asked again every *every* seconds while the page is seen and the view is live. */
-function useLens(name, args, at, ready, every = 0) {
+/** Changes come in bursts: a live lens asks again once they settle, not once per change. */
+const LIVE_SETTLE_MS = 2000;
+/** ...and never sooner than this many times as long as its last answer took: a big fabric
+ * being reconfigured changes something every second, and a lens is the whole fabric. */
+const LIVE_BUSY = 2;
+
+/** What each lens is made from, as /api/lenses says: asked once for every lens. */
+let lensReads = null;
+
+function useReads(name) {
+  const [reads, setReads] = useState(null);
+  useEffect(() => {
+    if (!name) return setReads(null);
+    lensReads ??= get("/api/lenses").then((all) => Object.fromEntries(all.map((l) => [l.name, l.reads ?? []])));
+    let current = true;
+    lensReads.then((r) => current && setReads(r[name] ?? [])).catch(() => current && setReads([]));
+    return () => {
+      current = false;
+    };
+  }, [name]);
+  return reads;
+}
+
+/** A lens's answer, asked again every *every* seconds while the page is seen and the view is
+ * live; with *live*, also whenever a report it is made from changes. ``refresh()`` asks now. */
+function useLens(name, args, at, ready, every = 0, live = false) {
   const [state, setState] = useState({ answer: null, error: "", loading: false, updated: 0 });
   const [tick, setTick] = useState(0);
   const key = JSON.stringify([name, args, at]);
+  const reads = useReads(live && ready && !at ? name : "");
+  const timer = useRef(null);
+  const asking = useRef(false);
+  /** A change told while asking: the answer on its way may be from before it. */
+  const missed = useRef(false);
+  /** How long the last answer took, in ms. */
+  const took = useRef(0);
+  const again = () => {
+    if (timer.current || asking.current) {
+      missed.current = true;
+      return;
+    }
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      setTick((t) => t + 1);
+    }, Math.max(LIVE_SETTLE_MS, LIVE_BUSY * took.current));
+  };
+  useEffect(() => {
+    if (!reads?.length) return;
+    // An update moved only counters and ages: what a lens shows is the same.
+    const stop = follow(reads, (type, event) => {
+      if (type === "change" ? event.op !== "update" : type === "resync") again();
+    });
+    return () => {
+      stop();
+      clearTimeout(timer.current);
+      timer.current = null;
+    };
+  }, [key, reads]);
   useEffect(() => {
     if (!ready || at || !every) return;
     const timer = setInterval(() => document.hidden || setTick((t) => t + 1), every * 1000);
@@ -65,15 +118,43 @@ function useLens(name, args, at, ready, every = 0) {
       return;
     }
     let current = true;
+    const started = performance.now();
+    asking.current = true;
+    missed.current = false;
     setState((s) => ({ ...s, loading: true, error: "" }));
     get(`/api/lenses/${name}`, { ...args, at, table: 1 })
       .then((answer) => current && setState({ answer, error: "", loading: false, updated: Date.now() / 1000 }))
-      .catch((e) => current && setState({ answer: null, error: e.message, loading: false, updated: 0 }));
+      .catch((e) => current && setState({ answer: null, error: e.message, loading: false, updated: 0 }))
+      .finally(() => {
+        asking.current = false;
+        took.current = performance.now() - started;
+        if (current && missed.current) {
+          missed.current = false;
+          again();
+        }
+      });
     return () => {
       current = false;
     };
   }, [key, ready, tick]);
-  return { ...state, key };
+  const refresh = () => {
+    clearTimeout(timer.current);
+    timer.current = null;
+    setTick((t) => t + 1);
+  };
+  return { ...state, key, refresh, live: Boolean(reads?.length) };
+}
+
+/** When a lens was read, whether it follows the fabric, and a button to read it again now. */
+function LiveControl({ state, at }) {
+  const when = state.loading ? "Refreshing…" : state.updated ? `Updated ${clock(state.updated)}` : "";
+  const how = at ? "As the history had it then" : state.live ? "Follows the fabric: read again when it changes" : "";
+  return html`<span class="lens-live">
+    ${state.live && !at && html`<span class="live-dot" title=${how}></span>`}
+    ${!at && when && html`<span class="muted" title=${how}>${when}</span>`}
+    <button class="refresh-now" onClick=${state.refresh} disabled=${Boolean(at) || state.loading}
+            title=${at ? "A past instant does not change" : "Read it again now"}>↻ Refresh</button>
+  </span>`;
 }
 
 /** The mac-vrfs and ip-vrfs there are, for the forms. */
@@ -693,7 +774,7 @@ function Card({ card, expanded, onToggle, go, focusCarrier = "" }) {
 }
 
 export function ServiceView({ query, go, at }) {
-  const state = useLens("service", {}, at, true);
+  const state = useLens("service", {}, at, true, 0, true);
   const all = useMemo(() => cards(state.answer?.records ?? []), [state.answer]);
   const kind = query.kind || (query.name && all.find((c) => c.names.includes(query.name))?.type) || "mac-vrf";
   const [find, setFind] = useState(query.name || "");
@@ -737,6 +818,7 @@ export function ServiceView({ query, go, at }) {
       <input class="card-find" value=${find} onInput=${(e) => setFind(e.target.value)}
              placeholder="Filter by name or node" aria-label="Filter services" />
       ${sites.length > 1 && html`<span class="muted">${sites.length} sites, from which loopbacks each node has a host route to</span>`}
+      <${LiveControl} state=${state} at=${at} />
     </div>
     <${Result} state=${state}>
       ${shown.length

@@ -153,27 +153,43 @@ class Store:
     # ----------------------------------------------------------------- write
 
     def write(self, changes: Iterable[Change]) -> list[int]:
-        """Log *changes* - the kept ones - and fold them into ``current``; their sequence numbers."""
-        seqs = []
+        """Log *changes* - the kept ones - and fold them into ``current``; their sequence numbers.
+
+        A few statements whatever the number of changes: each one lets go of the GIL
+        while SQLite runs, and gets it back only when the busy threads let it - up to
+        a switch interval later. A statement per change made a scale-up's write of
+        thousands of changes take minutes on a busy server.
+        """
+        kept = [c for c in changes if c.kept]
+        if not kept:
+            return []
+        rows = [(c.ts, c.node, c.report, c.key, str(c.op), _json(c.before), _json(c.after)) for c in kept]
+        # Where each record ends up: the last change to it says.
+        last = {(c.node, c.report, c.key): c for c in kept}
+        gone = [k for k, c in last.items() if c.op is Op.REMOVE]
+        kept_now = [(*k, _json(c.after)) for k, c in last.items() if c.op is not Op.REMOVE]
         with self.db:
-            for c in changes:
-                if not c.kept:
-                    continue
-                cur = self.db.execute(
-                    "INSERT INTO changes (ts, node, report, key, op, before, after) VALUES (?,?,?,?,?,?,?)",
-                    (c.ts, c.node, c.report, c.key, str(c.op), _json(c.before), _json(c.after)),
+            cur = self.db.execute(
+                "INSERT INTO changes (ts, node, report, key, op, before, after)"
+                " SELECT j.value->>0, j.value->>1, j.value->>2, j.value->>3, j.value->>4,"
+                " j.value->>5, j.value->>6 FROM json_each(?) AS j ORDER BY j.key",
+                (json.dumps(rows),),
+            )
+            if gone:
+                self.db.execute(
+                    "DELETE FROM current WHERE (node, report, key) IN"
+                    " (SELECT j.value->>0, j.value->>1, j.value->>2 FROM json_each(?) AS j)",
+                    (json.dumps(gone),),
                 )
-                seqs.append(cur.lastrowid or 0)
-                if c.op is Op.REMOVE:
-                    self.db.execute(
-                        "DELETE FROM current WHERE node=? AND report=? AND key=?", (c.node, c.report, c.key)
-                    )
-                else:
-                    self.db.execute(
-                        "INSERT OR REPLACE INTO current (node, report, key, record) VALUES (?,?,?,?)",
-                        (c.node, c.report, c.key, _json(c.after)),
-                    )
-        return seqs
+            if kept_now:
+                self.db.execute(
+                    "INSERT OR REPLACE INTO current (node, report, key, record)"
+                    " SELECT j.value->>0, j.value->>1, j.value->>2, j.value->>3 FROM json_each(?) AS j",
+                    (json.dumps(kept_now),),
+                )
+        # One statement, one writer: the sequence numbers it took are the ones before its last.
+        newest = cur.lastrowid or 0
+        return list(range(newest - len(rows) + 1, newest + 1))
 
     # ------------------------------------------------------------------ read
 

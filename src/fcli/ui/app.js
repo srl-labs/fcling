@@ -16,6 +16,9 @@ import { LayerDetails, Layers } from "./topology3d.js";
 const WATCHED = ["checks", "lldp", "subif", "services", "es", "lag", "bgp-peers", "isis", "ospf"];
 /** Changes come in bursts: refresh once they settle, not once per change. */
 const SETTLE_MS = 1500;
+/** A refresh waits this many times as long as the last one took: a big fabric being
+ * reconfigured is never loading all the time - its topology is megabytes. */
+const BUSY_FACTOR = 2;
 /** Rates change on every poll and are no history, so no event says so: traffic is fetched this often. */
 const TRAFFIC_MS = 10_000;
 
@@ -242,6 +245,10 @@ function App() {
   const layeredRef = useRef(layered);
   layeredRef.current = layered;
   const pending = useRef(null);
+  /** A change told while a refresh was under way: it may not be in it. */
+  const missed = useRef(false);
+  /** How long the last refresh took, in ms. */
+  const loadMs = useRef(0);
   const overlaySettings = useOverlay();
   const service = overlaySettings.overlay.startsWith("service:") ? overlaySettings.overlay.slice(8) : null;
   const traffic = overlaySettings.overlay === "traffic";
@@ -252,6 +259,7 @@ function App() {
   );
 
   const load = async (when = atRef.current) => {
+    const started = performance.now();
     try {
       const [s, topology, checks, incidents] = await Promise.all([
         get("/api/status"),
@@ -267,6 +275,8 @@ function App() {
     } catch (e) {
       setLocked(e.status === 401);
       setError(e.message);
+    } finally {
+      loadMs.current = performance.now() - started;
     }
   };
 
@@ -276,12 +286,19 @@ function App() {
 
   useEffect(() => {
     get("/api/reports").then(setCatalog).catch(() => setCatalog([]));
+    let alive = true;
     const schedule = () => {
-      if (atRef.current || pending.current) return;
-      pending.current = setTimeout(() => {
+      if (atRef.current || !alive) return;
+      if (pending.current) {
+        missed.current = true;
+        return;
+      }
+      pending.current = setTimeout(async () => {
+        missed.current = false; // what was told until now, this refresh reads
+        await load();
         pending.current = null;
-        load();
-      }, SETTLE_MS);
+        if (missed.current) schedule();
+      }, Math.max(SETTLE_MS, BUSY_FACTOR * loadMs.current));
     };
     const stop = follow(
       WATCHED,
@@ -300,6 +317,7 @@ function App() {
     // Ages ("12m ago") move on even when nothing else does.
     const timer = setInterval(() => setTick((t) => t + 1), 30_000);
     return () => {
+      alive = false;
       stop();
       clearInterval(timer);
       clearTimeout(pending.current);

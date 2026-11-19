@@ -47,7 +47,7 @@ class _Servicer(gnmi_pb2_grpc.gNMIServicer):
         self.unknown = unknown
         self.gets: list[list[str]] = []
         self.subscribes: list[list[str]] = []
-        self.streams: list[asyncio.Queue[gnmi_pb2.Notification]] = []
+        self.streams: list[asyncio.Queue[Any]] = []
 
     async def _auth(self, context: grpc.aio.ServicerContext) -> None:
         md = dict(context.invocation_metadata() or ())
@@ -104,11 +104,14 @@ class _Servicer(gnmi_pb2_grpc.gNMIServicer):
                     update=gnmi_pb2.Notification(timestamp=1, update=[_update("/", value)])
                 )
         yield gnmi_pb2.SubscribeResponse(sync_response=True)
-        queue: asyncio.Queue[gnmi_pb2.Notification] = asyncio.Queue()
+        queue: asyncio.Queue[Any] = asyncio.Queue()
         self.streams.append(queue)
         try:
             while True:
-                yield gnmi_pb2.SubscribeResponse(update=await queue.get())
+                item = await queue.get()
+                if isinstance(item, tuple):  # what fail() asks: end the stream with an error
+                    await context.abort(*item)
+                yield gnmi_pb2.SubscribeResponse(update=item)
         finally:
             self.streams.remove(queue)
 
@@ -189,6 +192,15 @@ class FakeTarget:
         def send() -> None:
             for queue in self.servicer.streams:
                 queue.put_nowait(notification)
+
+        self._loop.call_soon_threadsafe(send)
+
+    def fail(self, code: grpc.StatusCode, message: str) -> None:
+        """End every open subscription with an error, as a node ends one it cannot keep up."""
+
+        def send() -> None:
+            for queue in self.servicer.streams:
+                queue.put_nowait((code, message))
 
         self._loop.call_soon_threadsafe(send)
 

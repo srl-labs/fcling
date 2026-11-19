@@ -160,7 +160,17 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         "events",
         "Server-sent events: changes, node status, configuration commits, acknowledgements. "
         "Reconnect with Last-Event-ID (or after) to catch up.",
-        (_REPORT, _NODE, Q("after", "Replay the changes after this sequence number first.", type="integer")),
+        (
+            _REPORT,
+            _NODE,
+            Q("after", "Replay the changes after this sequence number first.", type="integer"),
+            Q(
+                "brief",
+                "1: changes only as triggers - without before and after, one of each report, node and "
+                "kind (update or not) until it is read, nothing replayed. For a view that looks again "
+                "on a change: a fabric reconfigured at scale changes tens of thousands of records at once.",
+            ),
+        ),
         events=True,
     ),
     Endpoint("/api/lenses", ("GET",), "lenses", "Every lens: its arguments, columns and record schema."),

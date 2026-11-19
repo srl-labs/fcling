@@ -1165,6 +1165,33 @@ FLAP_FIELDS = {
     "nd": ("nd", "mac"),
 }
 
+#: The reports whose recent changes anything reads off a fabric: what flaps,
+#: and the cables that went away (an LLDP neighbour gone).
+HISTORY_REPORTS = (*FLAP_FIELDS, "lldp")
+
+
+def recent(change: Mapping[str, Any]) -> dict[str, Any] | None:
+    """*change* as far as a fabric's :attr:`~fcli.fabric.Fabric.changes` are read, or
+    ``None`` when nothing reads it: a flap's one field before and after, a cable's
+    neighbour before it went. A fabric being reconfigured at scale changes hundreds of
+    thousands of records in a :data:`FLAP_WINDOW`; kept whole, that was gigabytes."""
+    report, op = change["report"], str(change["op"])
+    base = {k: change[k] for k in ("ts", "node", "report", "key")} | {"op": op}
+    if report == "lldp":
+        before = change.get("before")
+        return {**base, "before": before} if op in ("remove", "change") and before else None
+    field = FLAP_FIELDS.get(report)
+    if field is None or op != "change":
+        return None
+    name = field[1]
+    before, after = (change.get("before") or {}).get(name), (change.get("after") or {}).get(name)
+    return None if before == after else {**base, "before": {name: before}, "after": {name: after}}
+
+
+def recent_changes(changes: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The :func:`recent` form of every change something reads."""
+    return [r for c in changes if (r := recent(c)) is not None]
+
 
 @check("flapping", "Sessions, ports and MACs that keep changing state")
 def check_flapping(fabric: Fabric) -> Iterator[Finding]:
