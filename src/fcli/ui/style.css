@@ -1720,6 +1720,27 @@ form.lens-form select {
   min-width: 220px;
 }
 
+/* When a lens was read, and a button to read it again: at the end of its filters. */
+.lens-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 13px;
+}
+
+.lens-live .live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.lens-live button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .service-card {
   background: var(--panel);
   border: 1px solid var(--line);

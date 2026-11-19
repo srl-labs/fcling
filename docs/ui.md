@@ -89,7 +89,7 @@ Open a commit to see what it did to the configuration: the configuration before 
 
 - **Where** finds an IP or MAC everywhere it is known ([lenses.md](lenses.md)). The nodes that hold it (configured, learned locally, or bound by ARP/ND) are picked out on the topology, marked with how they hold it. Above the table, the UI says whether a MAC on several leaves is multihomed or a duplicate.
 - **Path** traces from a node, or from a host's IP or MAC, to an address, and draws the result on the topology. The cables it forwards over are highlighted, VXLAN tunnels are dashed arcs with their VNI, and each node shows its hop: the cables crossed to reach it. The source and destination clients are highlighted too. Above it, where the trace ends: delivered (on which port, to which MAC) or why not.
-- **Service** shows one mac-vrf or ip-vrf on every node that carries it, and whether they agree. With no name given, it lists every service.
+- **Service** shows one mac-vrf or ip-vrf on every node that carries it, and whether they agree. With no name given, it lists every service. It follows the fabric: when a report it is made from changes, it is read again once the changes settle (2 s at least, and twice as long as the last answer took). The time it was read is beside the filter, and **↻ Refresh** reads it again at once.
 - **Endpoints** lists every attached host, with a filter that stays in the URL.
 
 ## Reports
@@ -113,7 +113,7 @@ Case doesn't matter, and the filters combine. On a report they are kept in the U
 
 ## Live, or as it was
 
-While live, the UI follows `/api/events` and refreshes about a second and a half after changes settle. The dot in the header shows the event stream: green for live, amber while reconnecting. Type a time in **Go back** (`30m`, `2h`, `14:02`) to show the topology, the incidents, the lenses and the reports as the history has them at that instant. Following changes pauses until **Back to live**. The history view always runs up to now.
+While live, the UI follows `/api/events` and refreshes about a second and a half after changes settle. It never waits less than twice as long as the last refresh took, so a big fabric being reconfigured is not reloaded back to back. The dot in the header shows the event stream: green for live, amber while reconnecting. Type a time in **Go back** (`30m`, `2h`, `14:02`) to show the topology, the incidents, the lenses and the reports as the history has them at that instant. Following changes pauses until **Back to live**. The history view always runs up to now.
 
 ## With a token
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fcli.checks import run_checks
+from fcli.checks import recent, recent_changes, run_checks
 from fcli.fabric import Fabric
 from fcli.incidents import correlate
 from fcli.inventory import Node
@@ -148,6 +148,38 @@ def test_flapping_comes_from_the_history() -> None:
     assert finding.detail.startswith("bgp changed 3 times (established / active / idle)")
     (incident,) = correlate([finding], fabric)
     assert incident.kind == "session"
+    # Kept in their recent form, the changes still make the finding.
+    slim = Fabric.of(NODES, _cabled(), changes=recent_changes(changes))
+    assert [f.detail for f in run_checks(slim) if f.check == "flapping"] == [finding.detail]
+
+
+def test_only_what_is_read_of_a_change_is_kept_recent() -> None:
+    """A fabric reconfigured at scale changes hundreds of thousands of records in a flap
+    window: kept whole, that was gigabytes, and none of it was read."""
+    base = {"ts": 1.0, "node": "leaf1", "key": "k"}
+    mac = {"destination": "ethernet-1/1", "type": "learnt", "vni": 10}
+    moved = {**mac, "destination": "ethernet-1/2"}
+    neighbour = {"system_name": "spine1", "interface": "ethernet-1/49", "port_id": "ethernet-1/1"}
+    assert recent({**base, "report": "mac", "op": "change", "before": mac, "after": moved}) == {
+        **base,
+        "report": "mac",
+        "op": "change",
+        "before": {"destination": "ethernet-1/1"},
+        "after": {"destination": "ethernet-1/2"},
+    }
+    assert recent({**base, "report": "lldp", "op": "remove", "before": neighbour, "after": None}) == {
+        **base,
+        "report": "lldp",
+        "op": "remove",
+        "before": neighbour,
+    }
+    # Not a flap: learned, aged out, another field moved; and a report nothing reads.
+    assert recent({**base, "report": "mac", "op": "add", "before": None, "after": mac}) is None
+    assert recent({**base, "report": "mac", "op": "remove", "before": mac, "after": None}) is None
+    other = {**mac, "vni": 11}
+    assert recent({**base, "report": "mac", "op": "change", "before": mac, "after": other}) is None
+    assert recent({**base, "report": "es-dest", "op": "change", "before": {}, "after": {"vteps": []}}) is None
+    assert recent({**base, "report": "lldp", "op": "add", "before": None, "after": neighbour}) is None
 
 
 def test_a_containerlab_nodes_memory_is_its_hosts_and_only_information() -> None:

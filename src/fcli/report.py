@@ -13,6 +13,7 @@ which is the only place a column title is written.
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -99,12 +100,26 @@ def _excluded_instance(value: Any) -> bool:
     return isinstance(value, tuple) and bool(value) and all(v in EXCLUDED_INSTANCES for v in value)
 
 
+@functools.cache
+def _named(model: type[Record]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The interface and network-instance fields *model* has - fields or properties.
+    Asked of every record of every pass, a field a model lacks went through pydantic's
+    ``__getattr__`` and an exception each time: a fifth of a busy server's evaluation."""
+
+    def has(name: str) -> bool:
+        return name in model.model_fields or isinstance(getattr(model, name, None), property)
+
+    return tuple(f for f in _INTERFACE_FIELDS if has(f)), tuple(f for f in model.instances if has(f))
+
+
 def excluded(record: Record) -> bool:
     """Whether *record* is about an excluded interface or network-instance."""
-    values = (getattr(record, f, None) for f in _INTERFACE_FIELDS)
-    if any(isinstance(v, str) and excluded_interface(v) for v in values):
-        return True
-    return any(_excluded_instance(getattr(record, f, None)) for f in record.instances)
+    interfaces, instances = _named(type(record))
+    for f in interfaces:
+        value = getattr(record, f)
+        if isinstance(value, str) and excluded_interface(value):
+            return True
+    return any(_excluded_instance(getattr(record, f)) for f in instances)
 
 
 @dataclass(frozen=True, slots=True)

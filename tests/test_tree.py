@@ -76,6 +76,71 @@ def test_delete_entry_and_container() -> None:
     assert tree.get("/interface") is None
 
 
+NHG = "/network-instance[name=default]/route-table/next-hop-group[index={}]"
+
+
+def test_deleted_entries_leave_the_list_and_its_index() -> None:
+    """A fabric scaled down deletes thousands of entries one path each: removed in
+    place, by key, the list keeps its index rather than being rebuilt each time."""
+    tree = Tree()
+    for i in range(6):
+        tree.update(NHG.format(i), {"index": str(i), "oper-state": "up"})
+    entries = tree.root["network-instance"][0]["route-table"]["next-hop-group"]
+    # One path, one notification; several in one, with one already gone and one absent.
+    tree.apply(Notification(timestamp=0, deletes=(parse(NHG.format(1)),)))
+    tree.apply(Notification(timestamp=0, deletes=tuple(parse(NHG.format(i)) for i in (3, 4, 1, 9))))
+    assert [m.value["index"] for m in tree.select("/network-instance/route-table/next-hop-group")] == [
+        "0",
+        "2",
+        "5",
+    ]
+    assert tree.root["network-instance"][0]["route-table"]["next-hop-group"] is entries
+    # Out of the index at once, out of the list itself when the writer compacts.
+    assert len(entries) == 6
+    tree.compact()
+    assert [e["index"] for e in entries] == ["0", "2", "5"]
+    assert tree.get(NHG.format(3)) is None and tree.get(NHG.format(5)) == {"index": "5", "oper-state": "up"}
+    # Added again: the index still finds it, once.
+    tree.update(NHG.format(3) + "/oper-state", "down")
+    assert [m.value["oper-state"] for m in tree.select(NHG.format(3))] == ["down"]
+    # A delete under an entry, then of a whole list's parent, in one notification: in order.
+    tree.apply(
+        Notification(
+            timestamp=0,
+            deletes=(
+                parse(NHG.format(0)),
+                parse(NHG.format(5) + "/oper-state"),
+                parse("/network-instance[name=default]/route-table"),
+            ),
+        )
+    )
+    assert tree.get("/network-instance[name=default]/route-table") is None
+
+
+def test_an_entry_left_with_only_its_keys_is_gone() -> None:
+    """SR Linux deletes what was subscribed under a network-instance, never the
+    network-instance: kept, the entry was an empty network-instance in every report."""
+    tree = Tree()
+    ni = "/network-instance[name={}]"
+    for name in ("a", "b"):
+        tree.update(ni.format(name), {"type": "mac-vrf", "oper-state": "up"})
+        tree.update(ni.format(name) + "/interface[name=lag1.1]", {"oper-state": "up"})
+        tree.update(ni.format(name) + "/protocols/bgp-evpn/bgp-instance[id=1]", {"evi": 1})
+    deletes = ("/type", "/oper-state", "/interface[name=lag1.1]", "/protocols/bgp-evpn/bgp-instance[id=1]")
+    # One path a notification, as they come: gone with the last of them, not before.
+    for tail in deletes:
+        assert tree.get(ni.format("a")) is not None
+        tree.apply(Notification(timestamp=0, deletes=(parse(ni.format("a") + tail),)))
+    assert [m.keys["network-instance"] for m in tree.select("/network-instance")] == ["b"]
+    # All in one; and an entry with a leaf left keeps it, whatever the leaf's value.
+    tree.update(ni.format("b") + "/description", "")
+    tree.apply(Notification(timestamp=0, deletes=tuple(parse(ni.format("b") + t) for t in deletes)))
+    tree.compact()
+    # Empty containers on the way go too; an emptied list stays, with no entries to report.
+    assert tree.get(ni.format("b")) == {"name": "b", "description": "", "interface": []}
+    assert len(tree.root["network-instance"]) == 1
+
+
 def test_one_entry_list_unwrapped_to_a_dict() -> None:
     tree = Tree()
     tree.update("/", {"interface": {"name": "e1"}})

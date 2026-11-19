@@ -106,12 +106,26 @@ def to_proto(path: str | Path, origin: str = "") -> gnmi_pb2.Path:
     )
 
 
+#: Elements already made, by what the proto says: a sync is hundreds of thousands of
+#: paths, nearly all of them the same few names, and making each anew was a third of
+#: what a server's loop spent on it. Bounded: keys such as MAC addresses do not repeat.
+_ELEMS: dict[tuple[str, tuple[tuple[str, str], ...]], Elem] = {}
+_ELEMS_MAX = 1 << 16
+
+
+def _elem(e: gnmi_pb2.PathElem) -> Elem:
+    raw = (e.name, tuple(e.key.items()) if e.key else ())
+    elem = _ELEMS.get(raw)
+    if elem is None:
+        elem = Elem(strip_prefix(e.name), tuple(sorted((strip_prefix(k), v) for k, v in raw[1])))
+        if len(_ELEMS) < _ELEMS_MAX:
+            _ELEMS[raw] = elem
+    return elem
+
+
 def from_proto(path: gnmi_pb2.Path) -> Path:
     if path.elem:
-        return tuple(
-            Elem(strip_prefix(e.name), tuple(sorted((strip_prefix(k), v) for k, v in e.key.items())))
-            for e in path.elem
-        )
+        return tuple(map(_elem, path.elem))
     # Pre-0.4 targets spell the path as plain strings.
     return parse("/".join(path.element)) if path.element else ()
 

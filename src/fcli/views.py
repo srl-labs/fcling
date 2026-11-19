@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .checks import FLAP_WINDOW, Finding, finding_event, run_checks
+from .checks import FLAP_WINDOW, HISTORY_REPORTS, Finding, finding_event, recent_changes, run_checks
 from .collect import collect
 from .delta import Change, diff, keyed
 from .fabric import Fabric
@@ -78,9 +78,16 @@ def records_at(store: Store, ts: float, report: str, nodes: Sequence[str] = ()) 
     return [r for node in sorted(state) for r in _validate(report, state[node].values())]
 
 
-def fabric_at(store: Store, nodes: Sequence[Node], ts: float, reports: Iterable[str]) -> Fabric:
+def fabric_at(
+    store: Store,
+    nodes: Sequence[Node],
+    ts: float,
+    reports: Iterable[str],
+    history: Sequence[str] = HISTORY_REPORTS,
+) -> Fabric:
     """The fabric as the history says it was at *ts*: its records then, and the
-    history just before - for what was flapping - and who was unreachable."""
+    history just before - of the *history* reports: for what was flapping, the
+    cables gone - and who was unreachable."""
     names = [n.name for n in nodes]
     records = {r: records_at(store, ts, r, names) for r in reports if r in REGISTRY}
     findings = records_at(store, ts, "checks", names)
@@ -89,8 +96,8 @@ def fabric_at(store: Store, nodes: Sequence[Node], ts: float, reports: Iterable[
         for f in findings
         if isinstance(f, Finding) and f.check == "node_unreachable"
     }
-    changes = store.history(since=ts - FLAP_WINDOW, until=ts, limit=100_000)
-    return Fabric.of(nodes, records, unreachable, changes)
+    changes = store.history(since=ts - FLAP_WINDOW, until=ts, reports=list(history), limit=100_000)
+    return Fabric.of(nodes, records, unreachable, recent_changes(changes))
 
 
 def incidents(fabric: Fabric, raised: Mapping[tuple[str, str], float] | None = None) -> list[Incident]:
@@ -235,7 +242,8 @@ def far_ends(store: Store) -> FarEnds | None:
     if not names:
         return None
     try:
-        fabric = fabric_at(store, [Node(n, n) for n in names], time.time(), FAR_END_REPORTS)
+        # Of the history, only the cables gone: a far end is never a flap.
+        fabric = fabric_at(store, [Node(n, n) for n in names], time.time(), FAR_END_REPORTS, ("lldp",))
     except BeforeHistory:
         return None
     return FarEnds(fabric)

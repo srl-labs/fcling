@@ -190,6 +190,31 @@ def test_events_stream_changes(served: str, target: FakeTarget) -> None:
     assert next(replay)["seq"] == seq
 
 
+def test_a_brief_stream_tells_one_change_of_a_kind_until_it_is_read(served: str, target: FakeTarget) -> None:
+    """For the UI, which looks again on a change: a fabric reconfigured at scale changes
+    tens of thousands of records at once, more than a stream of every change holds."""
+    peer = PEER.format("10.0.0.1")
+    changes = []
+    # Brief, a stream opened again does not replay what was missed: the view looks again.
+    for event in Remote(served).events([("report", "bgp-peers"), ("brief", "1"), ("after", "0")]):
+        if event["type"] == "status":
+            _until(lambda: target.streaming)
+            # Both peers gone in one notification: two changes of one kind, one event.
+            target.push(deletes=[PEER.format("10.0.0.1"), PEER.format("10.0.0.2")])
+        if event["type"] == "change":
+            changes.append(event)
+            if len(changes) == 1:
+                # Read: the next change of the kind is told again.
+                target.push(updates={f"{peer}/session-state": "established", f"{peer}/peer-as": 65001})
+            else:
+                break
+    assert [(c["op"], c["report"], c["node"]) for c in changes] == [
+        ("remove", "bgp-peers", changes[0]["node"]),
+        ("add", "bgp-peers", changes[0]["node"]),
+    ]
+    assert all(c["seq"] and "before" not in c and "after" not in c for c in changes)
+
+
 def test_token(target: FakeTarget, tmp_path: Path) -> None:
     client, store = _client(target, tmp_path, token="s3cret")
     with client:
